@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>AMA LMS - Login</title>
+
+    <link rel="stylesheet" href="../css/signin.css" />
+  </head>
+
+  <body>
+    <main class="signin-page">
+
+      <section class="signin-panel">
+
+        <div class="signin-header">
+          <h1>Welcome Back</h1>
+          <p>Sign in to your AMA LMS account</p>
+        </div>
+
+        <form id="signin-form">
+
+          <div class="form-group">
+            <label for="email">Email</label>
+
+            <input
+              type="email"
+              id="email"
+              name="email"
+              placeholder="Enter your email"
+              autocomplete="email"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="password">Password</label>
+
+            <input
+              type="password"
+              id="password"
+              name="password"
+              placeholder="Enter your password"
+              autocomplete="current-password"
+              required
+            />
+          </div>
+
+          <button type="submit" id="signin-button">
+            Login
+          </button>
+
+          <p id="signin-message" role="alert"></p>
+
+        </form>
+
+        <a href="index.html" class="back-link">
+          Back to Home
+        </a>
+
+      </section>
+
+      <section class="signin-image">
+        <img
+          src="../assets/images/signin-bg.jpg"
+          alt="AMA LMS"
+        />
+      </section>
+
+    </main>
+
+    <script type="module" src="../js/signin.js"></script>
+  </body>
+</html>

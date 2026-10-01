@@ -1,0 +1,291 @@
+/* ================================
+   AMA LMS - Student Dashboard
+   ================================ */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background: #f5f6f8;
+    color: #212529;
+}
+
+/* ================================
+   Dashboard Layout
+   ================================ */
+
+.dashboard {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* ================================
+   Sidebar
+   ================================ */
+
+.sidebar {
+    width: 240px;
+    min-height: 100vh;
+
+    display: flex;
+    flex-direction: column;
+
+    background: #7a0019;
+    color: #ffffff;
+}
+
+.sidebar-header {
+    padding: 30px 25px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.sidebar-header h1 {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 5px;
+}
+
+.sidebar-header p {
+    font-size: 13px;
+    color: #f3dfe3;
+}
+
+/* ================================
+   Navigation
+   ================================ */
+
+.sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    padding: 20px 12px;
+    gap: 5px;
+}
+
+.nav-link {
+    display: block;
+
+    padding: 12px 14px;
+
+    color: #f3dfe3;
+    text-decoration: none;
+
+    border-radius: 6px;
+
+    font-size: 14px;
+
+    transition: 0.2s ease;
+}
+
+.nav-link:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+}
+
+.nav-link.active {
+    background: #ffffff;
+    color: #7a0019;
+    font-weight: 600;
+}
+
+/* ================================
+   Sidebar Footer
+   ================================ */
+
+.sidebar-footer {
+    margin-top: auto;
+    padding: 20px 12px;
+}
+
+.logout-link {
+    display: block;
+
+    padding: 12px 14px;
+
+    color: #f3dfe3;
+    text-decoration: none;
+
+    border-radius: 6px;
+
+    font-size: 14px;
+
+    transition: 0.2s ease;
+}
+
+.logout-link:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+}
+
+/* ================================
+   Main Content
+   ================================ */
+
+.dashboard-content {
+    flex: 1;
+    min-width: 0;
+
+    padding: 35px 40px;
+}
+
+/* ================================
+   Header
+   ================================ */
+
+.dashboard-header {
+    margin-bottom: 30px;
+}
+
+.dashboard-header h2 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.dashboard-header p {
+    color: #6c757d;
+    font-size: 14px;
+}
+
+/* ================================
+   Dashboard Cards
+   ================================ */
+
+.dashboard-cards {
+    display: grid;
+
+    grid-template-columns: repeat(4, 1fr);
+
+    gap: 20px;
+
+    margin-bottom: 30px;
+}
+
+.dashboard-card {
+    background: #ffffff;
+
+    padding: 22px;
+
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+}
+
+.dashboard-card h3 {
+    font-size: 14px;
+    font-weight: 600;
+
+    color: #6c757d;
+
+    margin-bottom: 12px;
+}
+
+.dashboard-card p {
+    font-size: 28px;
+    font-weight: 700;
+
+    color: #7a0019;
+
+    margin-bottom: 6px;
+}
+
+.dashboard-card span {
+    font-size: 12px;
+    color: #8a8f98;
+}
+
+/* ================================
+   Dashboard Sections
+   ================================ */
+
+.dashboard-section {
+    background: #ffffff;
+
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+
+    min-height: 250px;
+}
+
+.section-header {
+    padding: 20px 22px;
+
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.section-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    min-height: 180px;
+
+    color: #8a8f98;
+    font-size: 14px;
+}
+
+/* ================================
+   Tablet
+   ================================ */
+
+@media (max-width: 1000px) {
+
+    .dashboard-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+}
+
+/* ================================
+   Mobile
+   ================================ */
+
+@media (max-width: 700px) {
+
+    .dashboard {
+        display: block;
+    }
+
+    .sidebar {
+        width: 100%;
+        min-height: auto;
+    }
+
+    .sidebar-header {
+        padding: 20px;
+    }
+
+    .sidebar-nav {
+        flex-direction: row;
+        overflow-x: auto;
+        padding: 10px 12px;
+    }
+
+    .nav-link {
+        white-space: nowrap;
+    }
+
+    .sidebar-footer {
+        padding: 10px 12px 15px;
+    }
+
+    .dashboard-content {
+        padding: 25px 20px;
+    }
+
+    .dashboard-header h2 {
+        font-size: 24px;
+    }
+
+    .dashboard-cards {
+        grid-template-columns: 1fr;
+    }
+
+}

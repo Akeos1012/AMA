@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>AMA LMS - Student Dashboard</title>
+
+    <link rel="stylesheet" href="../../css/student.css" />
+  </head>
+
+  <body>
+
+    <div class="dashboard">
+
+      <!-- Sidebar -->
+      <aside class="sidebar">
+
+        <div class="sidebar-header">
+          <h1>AMA LMS</h1>
+          <p>Student Portal</p>
+        </div>
+
+        <nav class="sidebar-nav">
+
+          <a href="student_dashboard.html" class="nav-link active">
+            Dashboard
+          </a>
+
+          <a href="student/lessons.html" class="nav-link">
+            Lessons
+          </a>
+
+          <a href="student/quizzes.html" class="nav-link">
+            Quizzes
+          </a>
+
+          <a href="student/results.html" class="nav-link">
+            Results
+          </a>
+
+        </nav>
+
+        <div class="sidebar-footer">
+          <a href="index.html" class="logout-link">
+            Logout
+          </a>
+        </div>
+
+      </aside>
+
+      <!-- Main Content -->
+      <main class="dashboard-content">
+
+        <header class="dashboard-header">
+          <div>
+            <h2>Student Dashboard</h2>
+            <p>Welcome back, Student</p>
+          </div>
+        </header>
+
+        <!-- Summary Cards -->
+        <section class="dashboard-cards">
+
+          <div class="dashboard-card">
+            <h3>Lessons</h3>
+            <p>0</p>
+            <span>Available lessons</span>
+          </div>
+
+          <div class="dashboard-card">
+            <h3>Quizzes</h3>
+            <p>0</p>
+            <span>Available quizzes</span>
+          </div>
+
+          <div class="dashboard-card">
+            <h3>Completed</h3>
+            <p>0</p>
+            <span>Completed quizzes</span>
+          </div>
+
+          <div class="dashboard-card">
+            <h3>Average Score</h3>
+            <p>0%</p>
+            <span>Quiz performance</span>
+          </div>
+
+        </section>
+
+        <!-- Recent Activity -->
+        <section class="dashboard-section">
+
+          <div class="section-header">
+            <h3>Recent Activity</h3>
+          </div>
+
+          <div class="empty-state">
+            <p>No recent activity.</p>
+          </div>
+
+        </section>
+
+      </main>
+
+    </div>
+
+    <script src="../js/student.js"></script>
+
+  </body>
+</html>
