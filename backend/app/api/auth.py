@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 router = APIRouter()
-bearer_scheme = HTTPBearer(auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False, scheme_name="BearerAuth")
 
 
 def verify_firebase_token(
@@ -31,7 +31,7 @@ def verify_firebase_token(
         decoded_token = firebase_auth.verify_id_token(
             credentials.credentials,
             app=app,
-            check_revoked=False,
+            check_revoked=True,
         )
     except (firebase_auth.InvalidIdTokenError, firebase_auth.ExpiredIdTokenError):
         raise HTTPException(
@@ -56,9 +56,18 @@ def require_role(required_role: str) -> Callable[..., dict[str, Any]]:
 
     return verify_role
 
+require_admin = require_role("admin")
+
 
 @router.get("/auth/me")
 def read_current_user(
     decoded_token: dict[str, Any] = Depends(verify_firebase_token),
 ) -> dict[str, Any]:
     return {"uid": decoded_token["uid"], "role": decoded_token.get("role")}
+
+
+@router.get("/auth/admin-test")
+def admin_test(
+    decoded_token: dict[str, Any] = Depends(require_admin),
+) -> dict[str, str]:
+    return {"message": "Admin authorization successful"}
