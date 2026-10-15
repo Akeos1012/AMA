@@ -6,8 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.auth import router as auth_router
 from app.api.admin_users import router as admin_users_router
 from app.api.admin_subjects import router as admin_subjects_router
+from app.api.admin_classes import router as admin_classes_router
+from app.api.lessons import router as lessons_router
 
-cred = credentials.Certificate("firebase-service-account.json")
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+cred = credentials.Certificate(BASE_DIR / "firebase-service-account.json")
 
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
@@ -31,3 +36,5 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api")
 app.include_router(admin_users_router, prefix="/api")
 app.include_router(admin_subjects_router, prefix="/api")
+app.include_router(admin_classes_router, prefix="/api")
+app.include_router(lessons_router, prefix="/api")
