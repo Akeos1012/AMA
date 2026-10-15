@@ -14,19 +14,13 @@ import {
 import { authenticatedFetch } from "../../services/api.js";
 import PortalLayout from "../../components/PortalLayout.jsx";
 import AdminNavigation from "../../components/navigation/AdminNavigation.jsx";
-import "../../styles/admin.css";
+import { parseUserCsv, userGrades } from "./users/userCsv.js";
+import UserAccountDialog from "./users/UserAccountDialog.jsx";
+import UsersCsvPreview from "./users/UsersCsvPreview.jsx";
+import "./Users.css";
 
 const USERS_ENDPOINT = "/api/admin/users";
 const USERS_PER_PAGE = 15;
-const USER_GRADES = [
-  "Grade 1",
-  "Grade 2",
-  "Grade 3",
-  "Grade 4",
-  "Grade 5",
-  "Grade 6",
-];
-
 const emptyForm = {
   role: "",
   name: "",
@@ -62,43 +56,6 @@ function getCreateErrorMessage(status, detail) {
     return "The server could not create the account. Please try again.";
   }
   return "Unable to create the account. Check the details and try again.";
-}
-
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let value = "";
-  let inQuotes = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character === '"' && inQuotes && text[index + 1] === '"') {
-      value += '"';
-      index += 1;
-    } else if (character === '"') {
-      inQuotes = !inQuotes;
-    } else if (character === "," && !inQuotes) {
-      row.push(value.trim());
-      value = "";
-    } else if ((character === "\n" || character === "\r") && !inQuotes) {
-      if (character === "\r" && text[index + 1] === "\n") index += 1;
-      row.push(value.trim());
-      if (row.some(Boolean)) rows.push(row);
-      row = [];
-      value = "";
-    } else {
-      value += character;
-    }
-  }
-
-  if (inQuotes) throw new Error("The CSV contains an unclosed quoted field.");
-  row.push(value.trim());
-  if (row.some(Boolean)) rows.push(row);
-  return rows;
-}
-
-function normalizeCsvHeader(value) {
-  return value.trim().toLowerCase().replace(/[_\s]+/g, " ");
 }
 
 function formatCreatedDate(timestamp) {
@@ -495,73 +452,7 @@ function UsersPage() {
       setCsvError("");
       setCsvPreview(null);
       try {
-        const parsedRows = parseCsv(await file.text());
-        if (parsedRows.length < 2) {
-          throw new Error("The CSV must contain a header and at least one user.");
-        }
-        const headers = parsedRows[0].map(normalizeCsvHeader);
-        const headerIndexes = {
-          studentId: headers.findIndex((header) =>
-            ["student id", "id"].includes(header),
-          ),
-          name: headers.indexOf("name"),
-          email: headers.indexOf("email"),
-          grade: headers.findIndex((header) =>
-            ["grade", "grade level"].includes(header),
-          ),
-          section: headers.indexOf("section"),
-          sex: headers.indexOf("sex"),
-        };
-        const missingColumns = Object.entries({
-          "Student ID": headerIndexes.studentId,
-          Name: headerIndexes.name,
-          Email: headerIndexes.email,
-          Grade: headerIndexes.grade,
-          Section: headerIndexes.section,
-          Sex: headerIndexes.sex,
-        })
-          .filter(([, index]) => index < 0)
-          .map(([label]) => label);
-        if (missingColumns.length) {
-          throw new Error(`Missing CSV columns: ${missingColumns.join(", ")}.`);
-        }
-
-        const studentIds = new Set();
-        const emails = new Set();
-        const errors = [];
-        const rows = parsedRows.slice(1).map((columns, index) => {
-          const row = {
-            student_id: columns[headerIndexes.studentId] ?? "",
-            name: columns[headerIndexes.name] ?? "",
-            email: columns[headerIndexes.email] ?? "",
-            grade_level: columns[headerIndexes.grade] ?? "",
-            section: columns[headerIndexes.section] ?? "",
-            sex: (columns[headerIndexes.sex] ?? "").toLowerCase(),
-          };
-          const lineNumber = index + 2;
-          if (Object.values(row).some((value) => !value.trim())) {
-            errors.push(`Row ${lineNumber}: all student fields are required.`);
-          }
-          if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) {
-            errors.push(`Row ${lineNumber}: email address is invalid.`);
-          }
-          if (row.grade_level && !USER_GRADES.includes(row.grade_level)) {
-            errors.push(`Row ${lineNumber}: grade must be Grade 1 through Grade 6.`);
-          }
-          if (row.sex && !["boy", "girl"].includes(row.sex)) {
-            errors.push(`Row ${lineNumber}: sex must be Boy or Girl.`);
-          }
-          if (row.student_id && studentIds.has(row.student_id.toLowerCase())) {
-            errors.push(`Row ${lineNumber}: Student ID is duplicated in this file.`);
-          }
-          if (row.email && emails.has(row.email.toLowerCase())) {
-            errors.push(`Row ${lineNumber}: email is duplicated in this file.`);
-          }
-          studentIds.add(row.student_id.toLowerCase());
-          emails.add(row.email.toLowerCase());
-          return row;
-        });
-        setCsvPreview({ rows, errors, fileName: file.name });
+        setCsvPreview(parseUserCsv(await file.text(), file.name));
       } catch (error) {
         setCsvError(error.message || "Could not read this CSV file.");
       }
@@ -570,6 +461,7 @@ function UsersPage() {
   return (
     <PortalLayout
       role="admin"
+      pageClassName="page-admin-users"
       title="Users"
       description="Manage registered students, teachers, and administrators."
       navigation={<AdminNavigation activePath="/admin/users" />}
@@ -601,213 +493,19 @@ function UsersPage() {
         </div>
       }
     >
-      <div
-        id="create-user-modal"
-        className={`modal-overlay${isModalOpen ? " active" : ""}`}
-        aria-hidden={!isModalOpen}
-        onClick={(event) => {
-          if (event.target === event.currentTarget) closeCreateUserDialog();
-        }}
-      >
-        <div
-          className="modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="create-user-title"
-        >
-          <div className="modal-header">
-            <div>
-              <h3 id="create-user-title">
-                {editingUser ? "Edit Account" : "Create Account"}
-              </h3>
-              <p>
-                {editingUser
-                  ? `Update ${getRoleLabel(editingUser.role).toLowerCase()} account details.`
-                  : "Create a student or teacher account."}
-              </p>
-            </div>
-            <button
-              type="button"
-              id="close-create-user-modal"
-              className="modal-close"
-              aria-label="Close"
-              onClick={closeCreateUserDialog}
-            >
-              &times;
-            </button>
-          </div>
-
-          <form
-            id="create-user-form"
-            onSubmit={editingUser ? handleEditUser : handleCreateUser}
-          >
-            {createError && (
-              <div className="form-message error" role="alert">
-                {createError}
-              </div>
-            )}
-
-            <div className="form-group">
-              <label htmlFor="user-role">Role</label>
-              <select
-                id="user-role"
-                name="role"
-                value={form.role}
-                onChange={updateForm}
-                required
-                disabled={Boolean(editingUser)}
-              >
-                <option value="">Select role</option>
-                <option value="student">Student</option>
-                <option value="teacher">Teacher</option>
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="user-name">Full Name</label>
-              <input
-                type="text"
-                id="user-name"
-                name="name"
-                placeholder="Enter full name"
-                value={form.name}
-                onChange={updateForm}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="user-email">Email</label>
-              <input
-                type="email"
-                id="user-email"
-                name="email"
-                placeholder="Enter email"
-                value={form.email}
-                onChange={updateForm}
-                required
-              />
-            </div>
-
-            {form.role === "student" && (
-              <div id="student-fields">
-                <div className="form-group">
-                  <label htmlFor="student-id">Student ID</label>
-                  <input
-                    type="text"
-                    id="student-id"
-                    name="student_id"
-                    placeholder="Enter student ID"
-                    value={form.student_id}
-                    onChange={updateForm}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="grade-level">Grade Level</label>
-                  <select
-                    id="grade-level"
-                    name="grade_level"
-                    value={form.grade_level}
-                    onChange={updateForm}
-                    required
-                  >
-                    <option value="">Select grade level</option>
-                    <option value="Grade 1">Grade 1</option>
-                    <option value="Grade 2">Grade 2</option>
-                    <option value="Grade 3">Grade 3</option>
-                    <option value="Grade 4">Grade 4</option>
-                    <option value="Grade 5">Grade 5</option>
-                    <option value="Grade 6">Grade 6</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label htmlFor="student-section">Section</label>
-                  <input
-                    type="text"
-                    id="student-section"
-                    name="section"
-                    placeholder="Enter section"
-                    value={form.section}
-                    onChange={updateForm}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="student-sex">Sex</label>
-                  <select
-                    id="student-sex"
-                    name="sex"
-                    value={form.sex}
-                    onChange={updateForm}
-                    required
-                  >
-                    <option value="">Select</option>
-                    <option value="boy">Boy</option>
-                    <option value="girl">Girl</option>
-                  </select>
-                </div>
-              </div>
-            )}
-
-            {form.role === "teacher" && (
-              <div id="teacher-fields">
-                <div className="form-group">
-                  <label htmlFor="employee-id">Employee ID</label>
-                  <input
-                    type="text"
-                    id="employee-id"
-                    name="employee_id"
-                    placeholder="Enter employee ID"
-                    value={form.employee_id}
-                    onChange={updateForm}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="department-subject">
-                    Department / Subject
-                  </label>
-                  <input
-                    type="text"
-                    id="department-subject"
-                    name="department_subject"
-                    placeholder="Enter department or subject"
-                    value={form.department_subject}
-                    onChange={updateForm}
-                    required
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="modal-actions">
-              <button
-                type="button"
-                id="cancel-create-user"
-                className="secondary-button"
-                onClick={closeCreateUserDialog}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                id="submit-create-user"
-                className="primary-button"
-                disabled={isSubmitting}
-              >
-                {isSubmitting
-                  ? editingUser
-                    ? "Saving..."
-                    : "Creating..."
-                  : editingUser
-                    ? "Save Changes"
-                    : "Create Account"}
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+      <UserAccountDialog
+        isOpen={isModalOpen}
+        editingUser={editingUser}
+        form={form}
+        createError={createError}
+        isSubmitting={isSubmitting}
+        grades={userGrades}
+        editingRoleLabel={getRoleLabel(editingUser?.role ?? "")}
+        onClose={closeCreateUserDialog}
+        onFormChange={updateForm}
+        onCreate={handleCreateUser}
+        onEdit={handleEditUser}
+      />
 
       <div className="users-page">
         <section className="users-summary-cards" aria-label="User account summary">
@@ -868,7 +566,7 @@ function UsersPage() {
               aria-label="Filter by grade"
             >
               <option value="">All Grades</option>
-              {USER_GRADES.map((grade) => (
+              {userGrades.map((grade) => (
                 <option value={grade} key={grade}>
                   {grade}
                 </option>
@@ -1112,93 +810,10 @@ function UsersPage() {
         )}
       </div>
 
-      <div
-        className={`modal-overlay${csvPreview ? " active" : ""}`}
-        aria-hidden={!csvPreview}
-        onClick={(event) => {
-          if (event.target === event.currentTarget) setCsvPreview(null);
-        }}
-      >
-        {csvPreview && (
-          <section
-            className="modal users-csv-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="users-csv-title"
-          >
-            <div className="modal-header">
-              <div>
-                <h3 id="users-csv-title">Student CSV Preview</h3>
-                <p>{csvPreview.fileName}</p>
-              </div>
-              <button
-                type="button"
-                className="modal-close"
-                aria-label="Close"
-                onClick={() => setCsvPreview(null)}
-              >
-                &times;
-              </button>
-            </div>
-            <div className="users-csv-content">
-              <p className="users-csv-notice" role="status">
-                Preview only: bulk account creation is not available, and no
-                accounts have been created. Use Create Account to create
-                accounts individually.
-              </p>
-              {csvPreview.errors.length > 0 && (
-                <div className="users-csv-errors" role="alert">
-                  <strong>
-                    Fix {csvPreview.errors.length} validation issue
-                    {csvPreview.errors.length === 1 ? "" : "s"} before using
-                    this data:
-                  </strong>
-                  <ul>
-                    {csvPreview.errors.map((error, index) => (
-                      <li key={`${index}-${error}`}>{error}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <div className="users-table-wrap users-csv-table-wrap">
-                <table className="users-table">
-                  <thead>
-                    <tr>
-                      <th>Student ID</th>
-                      <th>Name</th>
-                      <th>Email</th>
-                      <th>Grade</th>
-                      <th>Section</th>
-                      <th>Sex</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {csvPreview.rows.map((row, index) => (
-                      <tr key={`${row.student_id}-${index}`}>
-                        <td>{row.student_id || "—"}</td>
-                        <td>{row.name || "—"}</td>
-                        <td>{row.email || "—"}</td>
-                        <td>{row.grade_level || "—"}</td>
-                        <td>{row.section || "—"}</td>
-                        <td>{row.sex || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => setCsvPreview(null)}
-                >
-                  Close Preview
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
-      </div>
+      <UsersCsvPreview
+        preview={csvPreview}
+        onClose={() => setCsvPreview(null)}
+      />
 
         {usersMessage && (
           <p

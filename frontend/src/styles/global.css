@@ -1,0 +1,33 @@
+:root {
+  --color-brand: #7a0019;
+  --color-brand-dark: #5f0014;
+  --color-text: #212529;
+  --color-muted: #6c757d;
+  --color-border: #e5e7eb;
+  --color-control-border: #d9dde3;
+  --color-canvas: #f5f6f8;
+  --color-white: #ffffff;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-text);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}

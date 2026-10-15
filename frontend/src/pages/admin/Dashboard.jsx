@@ -8,7 +8,7 @@ import { authenticatedFetch } from "../../services/api.js";
 import PortalLayout from "../../components/PortalLayout.jsx";
 import AdminNavigation from "../../components/navigation/AdminNavigation.jsx";
 import { mockClasses } from "./classesMockData.js";
-import "../../styles/admin.css";
+import "./Dashboard.css";
 
 const USERS_ENDPOINT = "/api/admin/users";
 const SUBJECTS_ENDPOINT = "/api/admin/subjects";
@@ -265,6 +265,7 @@ export default function AdminDashboard() {
   return (
     <PortalLayout
       role="admin"
+      pageClassName="page-admin-dashboard"
       title={`Welcome back, ${adminName}`}
       description="Here's an overview of your AMA LMS."
       navigation={<AdminNavigation activePath="/admin/dashboard" />}

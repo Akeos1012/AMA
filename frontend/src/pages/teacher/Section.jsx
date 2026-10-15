@@ -1,7 +1,6 @@
 import React from "react";
 import SectionPage from "../../components/SectionPage.jsx";
 import TeacherNavigation from "../../components/navigation/TeacherNavigation.jsx";
-import "../../styles/teacher.css";
 
 const sectionByPath = {
   "/teacher/lessons": "Lessons",

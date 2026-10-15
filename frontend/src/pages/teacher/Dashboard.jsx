@@ -1,7 +1,6 @@
 import React from "react";
 import PortalLayout from "../../components/PortalLayout.jsx";
 import TeacherNavigation from "../../components/navigation/TeacherNavigation.jsx";
-import "../../styles/teacher.css";
 
 const cards = [
   ["Classes", "0", "Active classes"],

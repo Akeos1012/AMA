@@ -8,7 +8,11 @@ import { authenticatedFetch } from "../../services/api.js";
 import PortalLayout from "../../components/PortalLayout.jsx";
 import AdminNavigation from "../../components/navigation/AdminNavigation.jsx";
 import { classGrades, mockClasses } from "./classesMockData.js";
-import "../../styles/admin.css";
+import { parseClassStudentsCsv } from "./classes/classCsv.js";
+import ClassFormDialog from "./classes/ClassFormDialog.jsx";
+import ClassStudentsDialog from "./classes/ClassStudentsDialog.jsx";
+import ClassScheduleDialog from "./classes/ClassScheduleDialog.jsx";
+import "./Classes.css";
 
 const USERS_ENDPOINT = "/api/admin/users";
 const SUBJECTS_ENDPOINT = "/api/admin/subjects";
@@ -31,41 +35,6 @@ const emptyScheduleForm = {
   subjectId: "",
   teacherId: "",
 };
-
-function parseCsv(content) {
-  const rows = [];
-  let row = [];
-  let value = "";
-  let inQuotes = false;
-
-  for (let index = 0; index < content.length; index += 1) {
-    const character = content[index];
-    if (character === '"' && inQuotes && content[index + 1] === '"') {
-      value += '"';
-      index += 1;
-    } else if (character === '"') {
-      inQuotes = !inQuotes;
-    } else if (character === "," && !inQuotes) {
-      row.push(value.trim());
-      value = "";
-    } else if ((character === "\n" || character === "\r") && !inQuotes) {
-      if (character === "\r" && content[index + 1] === "\n") index += 1;
-      row.push(value.trim());
-      if (row.some(Boolean)) rows.push(row);
-      row = [];
-      value = "";
-    } else {
-      value += character;
-    }
-  }
-
-  if (inQuotes) {
-    throw new Error("The CSV contains an unclosed quoted field.");
-  }
-  row.push(value.trim());
-  if (row.some(Boolean)) rows.push(row);
-  return rows;
-}
 
 function loadStoredClasses() {
   try {
@@ -425,76 +394,10 @@ export default function Classes() {
     setCsvPreview(null);
     setCsvErrors([]);
     try {
-      const rows = parseCsv(await file.text());
-      if (rows.length < 2) {
-        throw new Error("CSV must include a header row and at least one student.");
-      }
-      const headers = rows[0].map((header) => header.trim().toLowerCase());
-      const requiredHeaders = ["student_id", "name", "email", "sex"];
-      const missingHeaders = requiredHeaders.filter(
-        (header) => !headers.includes(header),
+      const { previewStudents, validationErrors } = parseClassStudentsCsv(
+        await file.text(),
+        studentsClass.students,
       );
-      if (missingHeaders.length) {
-        throw new Error(
-          `Missing required columns: ${missingHeaders.join(", ")}.`,
-        );
-      }
-
-      const existingIds = new Set(
-        studentsClass.students.map((student) => student.id.trim().toLowerCase()),
-      );
-      const importedIds = new Set();
-      const validationErrors = [];
-      const previewStudents = [];
-      rows.slice(1).forEach((row, index) => {
-        const rowNumber = index + 2;
-        const student = Object.fromEntries(
-          requiredHeaders.map((header) => [
-            header,
-            row[headers.indexOf(header)]?.trim() ?? "",
-          ]),
-        );
-        const rowErrors = [];
-
-        if (row.length !== headers.length) {
-          rowErrors.push("column count does not match the header");
-        }
-        requiredHeaders.forEach((header) => {
-          if (!student[header]) rowErrors.push(`${header} is required`);
-        });
-        const normalizedId = student.student_id.toLowerCase();
-        if (student.student_id && existingIds.has(normalizedId)) {
-          rowErrors.push("Student ID is already assigned to this section");
-        }
-        if (student.student_id && importedIds.has(normalizedId)) {
-          rowErrors.push("Student ID is duplicated in this CSV");
-        }
-        if (student.student_id) importedIds.add(normalizedId);
-        if (
-          student.email &&
-          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(student.email)
-        ) {
-          rowErrors.push("email is invalid");
-        }
-        if (student.sex && !["boy", "girl"].includes(student.sex.toLowerCase())) {
-          rowErrors.push("sex must be boy or girl");
-        }
-
-        if (rowErrors.length) {
-          validationErrors.push(`Row ${rowNumber}: ${rowErrors.join(", ")}.`);
-        } else {
-          previewStudents.push({
-            id: student.student_id,
-            name: student.name,
-            email: student.email,
-            sex: student.sex.toLowerCase(),
-          });
-        }
-      });
-
-      if (rows.length - 1 !== previewStudents.length + validationErrors.length) {
-        validationErrors.push("One or more CSV rows could not be read.");
-      }
       setCsvPreview(previewStudents);
       setCsvErrors(validationErrors);
     } catch (error) {
@@ -701,6 +604,7 @@ export default function Classes() {
   return (
     <PortalLayout
       role="admin"
+      pageClassName="page-admin-classes"
       title="Classes"
       description=""
       navigation={<AdminNavigation activePath="/admin/classes" />}
@@ -1052,346 +956,38 @@ export default function Classes() {
         </section>
       </div>
 
-      {studentsClass && (
-        <div className="modal-overlay active" role="presentation">
-          <section
-            className="modal class-students-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="class-students-title"
-          >
-            <div className="modal-header">
-              <div>
-                <h3 id="class-students-title">
-                  Students — {studentsClass.gradeLevel} - {studentsClass.section}
-                </h3>
-                <p>{studentsClass.students.length} students in this section</p>
-              </div>
-              <button
-                type="button"
-                className="modal-close"
-                aria-label="Close students"
-                onClick={() => setStudentsClassId("")}
-              >
-                &times;
-              </button>
-            </div>
-            <div className="class-students-modal-content">
-              <div className="class-students-toolbar">
-                <input
-                  type="search"
-                  value={studentSearch}
-                  onChange={(event) => setStudentSearch(event.target.value)}
-                  placeholder="Search students by ID or name"
-                  aria-label="Search students"
-                />
-                <label className="secondary-button class-csv-picker">
-                  Import CSV
-                  <input
-                    type="file"
-                    accept=".csv,text/csv"
-                    onChange={handleCsvFile}
-                  />
-                </label>
-              </div>
-              <p className="class-demo-inline-note">
-                Student changes are temporary and are not saved to the school
-                database.
-              </p>
-              {visibleStudents.length ? (
-                <div className="class-students-table-wrap">
-                  <table className="classes-table class-students-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Student ID</th>
-                        <th scope="col">Name</th>
-                        <th scope="col">Sex</th>
-                        <th scope="col">
-                          <span className="visually-hidden">Action</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visibleStudents.map((student) => (
-                        <tr key={student.id}>
-                          <td>{student.id}</td>
-                          <td>{student.name}</td>
-                          <td>
-                            {student.sex
-                              ? student.sex[0].toUpperCase() +
-                                student.sex.slice(1)
-                              : "—"}
-                          </td>
-                          <td>
-                            <button
-                              type="button"
-                              className="class-edit-button class-delete-button"
-                              onClick={() => removeStudent(student.id)}
-                            >
-                              Remove
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="empty-state classes-empty-state">
-                  <p>
-                    {studentsClass.students.length
-                      ? "No students match this search."
-                      : "No students are assigned to this class."}
-                  </p>
-                </div>
-              )}
-            </div>
-            <div className="modal-actions class-students-modal-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setStudentsClassId("")}
-              >
-                Close
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
+      <ClassStudentsDialog
+        studentsClass={studentsClass}
+        visibleStudents={visibleStudents}
+        studentSearch={studentSearch}
+        onStudentSearchChange={(event) => setStudentSearch(event.target.value)}
+        onClose={() => setStudentsClassId("")}
+        onCsvFile={handleCsvFile}
+        onRemoveStudent={removeStudent}
+        csvPreview={csvPreview}
+        csvErrors={csvErrors}
+        onCloseCsvPreview={() => {
+          setCsvPreview(null);
+          setCsvErrors([]);
+        }}
+        onImportCsv={importCsvStudents}
+      />
 
-      {csvPreview && studentsClass && (
-        <div className="modal-overlay active class-csv-preview-overlay">
-          <section
-            className="modal class-csv-preview"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="csv-preview-title"
-          >
-            <div className="modal-header">
-              <div>
-                <h3 id="csv-preview-title">CSV Preview</h3>
-                <p>
-                  {csvPreview.length} students ready to import to{" "}
-                  {studentsClass.section}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="modal-close"
-                aria-label="Close CSV preview"
-                onClick={() => {
-                  setCsvPreview(null);
-                  setCsvErrors([]);
-                }}
-              >
-                &times;
-              </button>
-            </div>
-            <div className="class-csv-preview-content">
-              <p>
-                Required columns: <code>student_id,name,email,sex</code>
-              </p>
-              {csvErrors.length > 0 && (
-                <div className="class-csv-errors" role="alert">
-                  <strong>Resolve these CSV issues before importing:</strong>
-                  <ul>
-                    {csvErrors.map((error, index) => (
-                      <li key={`${index}-${error}`}>{error}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {csvPreview.length > 0 && (
-                <div className="class-students-table-wrap">
-                  <table className="classes-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Student ID</th>
-                        <th scope="col">Name</th>
-                        <th scope="col">Email</th>
-                        <th scope="col">Sex</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {csvPreview.map((student) => (
-                        <tr key={student.id}>
-                          <td>{student.id}</td>
-                          <td>{student.name}</td>
-                          <td>{student.email}</td>
-                          <td>{student.sex}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-            <div className="modal-actions class-students-modal-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => {
-                  setCsvPreview(null);
-                  setCsvErrors([]);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={importCsvStudents}
-                disabled={!csvPreview.length || csvErrors.length > 0}
-              >
-                Import Students
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {isScheduleModalOpen && selectedClass && (
-        <div className="modal-overlay active">
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="schedule-dialog-title"
-          >
-            <div className="modal-header">
-              <div>
-                <h3 id="schedule-dialog-title">
-                  {editingScheduleId ? "Edit Schedule" : "Add Schedule"}
-                </h3>
-                <p>
-                  {selectedClass.gradeLevel} - {selectedClass.section}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="modal-close"
-                aria-label="Close schedule"
-                onClick={closeScheduleDialog}
-              >
-                &times;
-              </button>
-            </div>
-            <form className="class-form" onSubmit={saveScheduleEntry}>
-              {scheduleError && (
-                <p className="form-message error" role="alert">
-                  {scheduleError}
-                </p>
-              )}
-              <div className="form-group">
-                <label htmlFor="schedule-day">Day</label>
-                <select
-                  id="schedule-day"
-                  name="day"
-                  value={scheduleForm.day}
-                  onChange={updateScheduleForm}
-                >
-                  {weekdays.map((day) => (
-                    <option key={day} value={day}>{day}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="class-schedule-time-fields">
-                <div className="form-group">
-                  <label htmlFor="schedule-start">Start Time</label>
-                  <input
-                    id="schedule-start"
-                    name="startTime"
-                    type="time"
-                    value={scheduleForm.startTime}
-                    onChange={updateScheduleForm}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="schedule-end">End Time</label>
-                  <input
-                    id="schedule-end"
-                    name="endTime"
-                    type="time"
-                    value={scheduleForm.endTime}
-                    onChange={updateScheduleForm}
-                    required
-                  />
-                </div>
-              </div>
-              <div className="form-group">
-                <label htmlFor="schedule-subject">Subject</label>
-                <select
-                  id="schedule-subject"
-                  name="subjectId"
-                  value={scheduleForm.subjectId}
-                  onChange={updateScheduleForm}
-                  required
-                >
-                  <option value="">Select an active subject</option>
-                  {getScheduleSubjects(selectedClass).map((subject) => (
-                    <option key={subject.id} value={subject.id}>
-                      {subject.name} ({subject.code})
-                      {subject.status !== "active" ? " (inactive)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-group">
-                <label htmlFor="schedule-teacher">Teacher</label>
-                <select
-                  id="schedule-teacher"
-                  name="teacherId"
-                  value={scheduleForm.teacherId}
-                  onChange={updateScheduleForm}
-                  required
-                  disabled={!scheduleForm.subjectId}
-                >
-                  <option value="">Select assigned teacher</option>
-                  {scheduleForm.teacherId &&
-                    !teachers.some(
-                      (teacher) => teacher.uid === scheduleForm.teacherId,
-                    ) && (
-                      <option value={scheduleForm.teacherId}>
-                        Existing assignment (account unavailable)
-                      </option>
-                    )}
-                  {(
-                    subjects.find(
-                      (subject) => subject.id === scheduleForm.subjectId,
-                    )?.teacher_ids ?? []
-                  )
-                    .map((teacherId) =>
-                      teachers.find((teacher) => teacher.uid === teacherId),
-                    )
-                    .filter(
-                      (teacher) =>
-                        teacher &&
-                        (!teacher.disabled ||
-                          teacher.uid === scheduleForm.teacherId),
-                    )
-                    .map((teacher) => (
-                      <option key={teacher.uid} value={teacher.uid}>
-                        {getTeacherName(teacher.uid)}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={closeScheduleDialog}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="primary-button">
-                  {editingScheduleId ? "Save Changes" : "Add Schedule"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
+      {isScheduleModalOpen && (
+        <ClassScheduleDialog
+          selectedClass={selectedClass}
+          editingScheduleId={editingScheduleId}
+          scheduleError={scheduleError}
+          scheduleForm={scheduleForm}
+          weekdays={weekdays}
+          teachers={teachers}
+          subjects={subjects}
+          onClose={closeScheduleDialog}
+          onSave={saveScheduleEntry}
+          onFormChange={updateScheduleForm}
+          getScheduleSubjects={getScheduleSubjects}
+          getTeacherName={getTeacherName}
+        />
       )}
 
       {deletingClass && (
@@ -1439,148 +1035,19 @@ export default function Classes() {
         </div>
       )}
 
-      <div
-        className={`modal-overlay${isModalOpen ? " active" : ""}`}
-        aria-hidden={!isModalOpen}
-        onClick={(event) => {
-          if (event.target === event.currentTarget) closeDialog();
-        }}
-      >
-        <div
-          className="modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="class-dialog-title"
-        >
-          <div className="modal-header">
-            <div>
-              <h3 id="class-dialog-title">
-                {editingClassId ? "Edit Class" : "Create Class"}
-              </h3>
-              <p>Set the grade, section, teacher, and status.</p>
-            </div>
-            <button
-              type="button"
-              className="modal-close"
-              aria-label="Close"
-              onClick={closeDialog}
-            >
-              &times;
-            </button>
-          </div>
-
-          <form className="class-form" onSubmit={handleSaveClass}>
-            {formError && (
-              <div className="form-message error" role="alert">
-                {formError}
-              </div>
-            )}
-            <div className="form-group">
-              <label htmlFor="class-grade">Grade Level</label>
-              <select
-                id="class-grade"
-                name="gradeLevel"
-                value={form.gradeLevel}
-                onChange={updateForm}
-                required
-              >
-                <option value="">Select grade level</option>
-                {classGrades.map((grade) => (
-                  <option key={grade} value={grade}>
-                    {grade}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="form-group">
-              <label htmlFor="class-section">Section Name</label>
-              <input
-                id="class-section"
-                name="section"
-                type="text"
-                value={form.section}
-                onChange={updateForm}
-                placeholder="Enter section name"
-                maxLength={60}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label htmlFor="class-teacher">Assigned Teacher</label>
-              <select
-                id="class-teacher"
-                name="teacherId"
-                value={form.teacherId}
-                onChange={updateForm}
-                required
-                disabled={teachersLoading || Boolean(teachersError)}
-              >
-                <option value="">
-                  {teachersLoading
-                    ? "Loading teachers..."
-                    : teachersError
-                      ? "Unable to load teachers"
-                      : teachers.length
-                        ? "Select teacher"
-                        : "No teacher accounts available."}
-                </option>
-                {form.teacherId &&
-                  !teachers.some((teacher) => teacher.uid === form.teacherId) && (
-                    <option value={form.teacherId}>
-                      Existing teacher assignment (account unavailable)
-                    </option>
-                  )}
-                {teachers
-                  .filter(
-                    (teacher) =>
-                      !teacher.disabled || teacher.uid === form.teacherId,
-                  )
-                  .map((teacher) => (
-                    <option key={teacher.uid} value={teacher.uid}>
-                      {teacher.display_name}
-                      {teacher.disabled ? " (disabled account)" : ""}
-                    </option>
-                  ))}
-              </select>
-              {!teachersLoading && !teachersError && teachers.length > 0 && (
-                <p className="classes-teacher-help">
-                  Disabled accounts are only shown for their existing class
-                  assignments.
-                </p>
-              )}
-            </div>
-            <div className="form-group">
-              <label htmlFor="class-status">Status</label>
-              <select
-                id="class-status"
-                name="status"
-                value={form.status}
-                onChange={updateForm}
-                required
-              >
-                <option value="Active">Active</option>
-                <option value="Inactive">Inactive</option>
-              </select>
-            </div>
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={closeDialog}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="primary-button"
-                disabled={teachersLoading || Boolean(teachersError)}
-              >
-                {editingClassId ? "Save Changes" : "Create Class"}
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+      <ClassFormDialog
+        isOpen={isModalOpen}
+        editingClassId={editingClassId}
+        form={form}
+        formError={formError}
+        classGrades={classGrades}
+        teachers={teachers}
+        teachersLoading={teachersLoading}
+        teachersError={teachersError}
+        onClose={closeDialog}
+        onFormChange={updateForm}
+        onSubmit={handleSaveClass}
+      />
       </div>
     </PortalLayout>
   );

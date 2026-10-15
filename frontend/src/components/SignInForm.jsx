@@ -5,7 +5,7 @@ import {
   getIdTokenResult,
   signInWithEmailAndPassword,
 } from "../services/firebase.js";
-import "../styles/signin.css";
+import "./SignInForm.css";
 
 const routeByRole = {
   admin: "/admin/dashboard",

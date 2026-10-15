@@ -1,0 +1,763 @@
+.page-admin-classes .classes-page-message {
+    margin: 0 0 14px;
+}
+
+.page-admin-classes .classes-teacher-error {
+    margin: 0 0 14px;
+}
+
+.page-admin-classes .classes-retry-button {
+    margin-left: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-brand);
+    font: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.page-admin-classes .classes-teacher-help {
+    margin-top: 6px;
+    color: var(--color-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.page-admin-classes .class-schedule-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 22px 0 10px;
+    padding-top: 16px;
+    border-top: 1px solid var(--color-border);
+}
+
+.page-admin-classes .class-schedule-heading h4 {
+    font-size: 14px;
+}
+
+.page-admin-classes .class-schedule-heading .secondary-button {
+    width: auto;
+}
+
+.page-admin-classes .class-students-modal-actions .secondary-button {
+    width: auto;
+}
+
+.page-admin-classes .class-students-modal-actions .primary-button {
+    width: auto;
+}
+
+.page-admin-classes .class-schedule-list {
+    display: grid;
+    gap: 14px;
+}
+
+.page-admin-classes .class-schedule-day h5 {
+    margin-bottom: 6px;
+    color: var(--color-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+}
+
+.page-admin-classes .class-schedule-entry {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f1f3;
+}
+
+.page-admin-classes .class-schedule-entry > div:first-child {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    font-size: 13px;
+}
+
+.page-admin-classes .class-schedule-entry > div:first-child span:last-child {
+    color: var(--color-muted);
+    font-size: 12px;
+}
+
+.page-admin-classes .class-schedule-empty {
+    color: var(--color-muted);
+    font-size: 12px;
+}
+
+.page-admin-classes .class-demo-inline-note {
+    color: var(--color-muted);
+    font-size: 12px;
+}
+
+.page-admin-classes .class-schedule-actions {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    white-space: nowrap;
+}
+
+.page-admin-classes .class-delete-button {
+    color: #b42318;
+}
+
+.page-admin-classes .class-students-modal {
+    max-width: 760px;
+}
+
+.page-admin-classes .class-students-modal-content {
+    padding: 18px 22px;
+}
+
+.page-admin-classes .class-csv-preview-content {
+    padding: 18px 22px;
+}
+
+.page-admin-classes .class-students-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.page-admin-classes .class-students-toolbar input[type="search"] {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--color-control-border);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 14px;
+}
+
+.page-admin-classes .class-csv-picker {
+    position: relative;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+}
+
+.page-admin-classes .class-csv-picker input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.page-admin-classes .class-demo-inline-note {
+    margin-bottom: 12px;
+}
+
+.page-admin-classes .class-students-table-wrap {
+    max-height: 50vh;
+    overflow: auto;
+}
+
+.page-admin-classes .class-students-modal-actions {
+    padding: 0 22px 20px;
+}
+
+.page-admin-classes .class-csv-preview-overlay {
+    z-index: 1010;
+}
+
+.page-admin-classes .class-csv-preview {
+    max-width: 760px;
+}
+
+.page-admin-classes .class-csv-preview-content > p {
+    margin-bottom: 12px;
+    color: var(--color-muted);
+    font-size: 13px;
+}
+
+.page-admin-classes .class-csv-errors {
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    background: #fff1f0;
+    color: #b42318;
+    font-size: 13px;
+}
+
+.page-admin-classes .class-csv-errors ul {
+    margin: 8px 0 0 18px;
+}
+
+.page-admin-classes .class-csv-errors li + li {
+    margin-top: 4px;
+}
+
+.page-admin-classes .class-schedule-time-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+.page-admin-classes .class-delete-warning {
+    padding: 0 22px;
+    color: #b42318;
+    font-size: 13px;
+}
+
+.page-admin-classes .class-danger-button {
+    background: #b42318;
+}
+
+.page-admin-classes .class-danger-button:hover {
+    background: #912018;
+}
+
+.page-admin-classes .classes-toolbar {
+    display: grid;
+    grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(150px, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.page-admin-classes .classes-toolbar label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: #495057;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.page-admin-classes .classes-toolbar input {
+    width: 100%;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--color-control-border);
+    border-radius: 6px;
+    background: var(--color-white);
+    color: var(--color-text);
+    font: inherit;
+    font-weight: 400;
+}
+
+.page-admin-classes .classes-toolbar select {
+    width: 100%;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--color-control-border);
+    border-radius: 6px;
+    background: var(--color-white);
+    color: var(--color-text);
+    font: inherit;
+    font-weight: 400;
+}
+
+.page-admin-classes .classes-toolbar input:focus {
+    border-color: var(--color-brand);
+    outline: 2px solid rgba(122, 0, 25, 0.12);
+}
+
+.page-admin-classes .classes-toolbar select:focus {
+    border-color: var(--color-brand);
+    outline: 2px solid rgba(122, 0, 25, 0.12);
+}
+
+.page-admin-classes .classes-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+    align-items: start;
+    gap: 14px;
+}
+
+.page-admin-classes .classes-panel {
+    min-width: 0;
+    overflow: hidden;
+    background: var(--color-white);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+}
+
+.page-admin-classes .classes-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.page-admin-classes .classes-panel-header > span {
+    color: var(--color-muted);
+    font-size: 13px;
+}
+
+.page-admin-classes .classes-table-wrap {
+    overflow-x: auto;
+}
+
+.page-admin-classes .classes-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.page-admin-classes .classes-table th {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 13px;
+}
+
+.page-admin-classes .classes-table td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 13px;
+}
+
+.page-admin-classes .classes-table th {
+    background: #f8f9fa;
+    color: var(--color-muted);
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.page-admin-classes .classes-table tbody tr {
+    transition: background 0.15s ease;
+}
+
+.page-admin-classes .classes-table tbody tr:hover {
+    background: #fafbfc;
+}
+
+.page-admin-classes .classes-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.page-admin-classes .classes-table tbody tr.selected {
+    background: #fff8f9;
+    box-shadow: inset 3px 0 0 var(--color-brand);
+}
+
+.page-admin-classes .class-select-button {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-brand);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.page-admin-classes .class-edit-button {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-brand);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.page-admin-classes .class-select-button:hover {
+    text-decoration: underline;
+}
+
+.page-admin-classes .class-edit-button:hover {
+    text-decoration: underline;
+}
+
+.page-admin-classes .classes-table td:last-child {
+    white-space: nowrap;
+}
+
+.page-admin-classes .classes-table .class-select-button {
+    padding: 5px 9px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.page-admin-classes .classes-table .class-edit-button {
+    padding: 5px 9px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.page-admin-classes .classes-table .class-delete-button {
+    padding: 5px 9px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.page-admin-classes .classes-table .class-select-button {
+    color: var(--color-brand);
+}
+
+.page-admin-classes .classes-table .class-edit-button {
+    color: var(--color-brand);
+}
+
+.page-admin-classes .classes-table .class-delete-button {
+    color: #b42318;
+}
+
+.page-admin-classes .classes-table .class-select-button:hover {
+    background: #fdf0f2;
+    text-decoration: none;
+}
+
+.page-admin-classes .classes-table .class-edit-button:hover {
+    background: #fdf0f2;
+    text-decoration: none;
+}
+
+.page-admin-classes .classes-table .class-delete-button:hover {
+    background: #fff1f0;
+    text-decoration: none;
+}
+
+.page-admin-classes .class-status {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: #e9f7ef;
+    color: #198754;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.page-admin-classes .class-status::before {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    content: "";
+    vertical-align: middle;
+}
+
+.page-admin-classes .class-status.inactive {
+    background: #f1f3f5;
+    color: var(--color-muted);
+}
+
+.page-admin-classes .classes-empty-state {
+    min-height: 150px;
+}
+
+.page-admin-classes .class-details-content {
+    padding: 18px 20px 20px;
+}
+
+.page-admin-classes .class-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px 20px;
+}
+
+.page-admin-classes .class-summary dt {
+    margin-bottom: 4px;
+    color: var(--color-muted);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.page-admin-classes .class-summary dd {
+    color: var(--color-text);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.page-admin-classes .class-students-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 22px 0 10px;
+    padding-top: 16px;
+    border-top: 1px solid var(--color-border);
+}
+
+.page-admin-classes .class-students-heading h4 {
+    font-size: 14px;
+}
+
+.page-admin-classes .class-students-heading span {
+    color: var(--color-muted);
+    font-size: 13px;
+}
+
+.page-admin-classes .class-student-list {
+    list-style: none;
+}
+
+.page-admin-classes .class-student-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f1f3;
+    font-size: 13px;
+}
+
+.page-admin-classes .class-student-list li span:last-child {
+    color: var(--color-muted);
+}
+
+.page-admin-classes .class-students-empty {
+    color: var(--color-muted);
+}
+
+.page-admin-classes .class-student-list li span:last-child {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--color-canvas);
+    color: #495057;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.page-admin-classes .class-details-content .class-view-students {
+    width: 100%;
+    margin-bottom: 12px;
+    border-color: var(--color-brand);
+    color: var(--color-brand);
+}
+
+.page-admin-classes .class-details-content .class-view-students:hover {
+    background: #fdf0f2;
+}
+
+.page-admin-classes .class-students-empty {
+    font-size: 13px;
+}
+
+.page-admin-classes .class-form {
+    padding: 22px;
+}
+
+.page-admin-classes .class-form .form-message {
+    margin: 0 0 16px;
+}
+
+@media (max-width: 1000px) {
+    .page-admin-classes .classes-workspace {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 700px) {
+    .page-admin-classes .classes-toolbar {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .page-admin-classes .classes-search {
+        grid-column: 1 / -1;
+    }
+
+    .page-admin-classes .class-students-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .page-admin-classes .class-csv-picker {
+        width: 100%;
+    }
+}
+
+@media (max-width: 420px) {
+    .page-admin-classes .classes-toolbar {
+        grid-template-columns: 1fr;
+    }
+
+    .page-admin-classes .classes-search {
+        grid-column: auto;
+    }
+}
+
+.page-admin-classes .classes-page-content {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    padding-bottom: 24px;
+}
+
+.page-admin-classes .classes-page-content .classes-toolbar {
+    flex: 0 0 auto;
+    grid-template-columns: minmax(220px, 2fr) minmax(150px, 1fr) minmax(150px, 1fr);
+    gap: 10px;
+    margin-bottom: 0;
+}
+
+.page-admin-classes .classes-page-content .classes-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.page-admin-classes .classes-page-content .classes-panel-header {
+    flex: 0 0 auto;
+    padding: 14px 18px;
+}
+
+.page-admin-classes .classes-page-content .classes-table-wrap {
+    overflow-x: auto;
+}
+
+.page-admin-classes .classes-page-content .classes-table th {
+    padding: 11px 12px;
+}
+
+.page-admin-classes .classes-page-content .classes-table td {
+    padding: 11px 12px;
+}
+
+.page-admin-classes .classes-pagination {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--color-border);
+}
+
+.page-admin-classes .classes-pagination .secondary-button {
+    padding: 7px 11px;
+    font-size: 13px;
+}
+
+.page-admin-classes .classes-pagination .secondary-button:disabled {
+    color: #9aa0a6;
+    background: #f8f9fa;
+    cursor: not-allowed;
+}
+
+.page-admin-classes .classes-page-numbers {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px;
+}
+
+.page-admin-classes .classes-page-number {
+    min-width: 32px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: #495057;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.page-admin-classes .classes-page-number:hover {
+    background: var(--color-canvas);
+}
+
+.page-admin-classes .classes-page-number.active {
+    border-color: var(--color-brand);
+    background: var(--color-brand);
+    color: var(--color-white);
+}
+
+.page-admin-classes .classes-page-content .class-details-content {
+    flex: 0 0 auto;
+    padding: 16px 18px;
+}
+
+.page-admin-classes .classes-page-content button:focus-visible {
+    outline: 2px solid rgba(122, 0, 25, 0.35);
+    outline-offset: 2px;
+}
+
+.page-admin-classes .classes-page-content input:focus-visible {
+    outline: 2px solid rgba(122, 0, 25, 0.35);
+    outline-offset: 2px;
+}
+
+.page-admin-classes .classes-page-content select:focus-visible {
+    outline: 2px solid rgba(122, 0, 25, 0.35);
+    outline-offset: 2px;
+}
+
+.page-admin-classes .classes-page-content .classes-workspace > .classes-panel:last-child {
+    position: sticky;
+    top: 20px;
+}
+
+@media (max-width: 1000px) {
+    .page-admin-classes .classes-page-content .classes-workspace > .classes-panel:last-child {
+        position: static;
+    }
+}
+
+@media (max-width: 700px) {
+    .page-admin-classes .classes-page-content .classes-toolbar {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .page-admin-classes .classes-page-content .classes-search {
+        grid-column: 1 / -1;
+    }
+
+    .page-admin-classes .classes-pagination {
+        gap: 6px;
+        padding: 8px;
+    }
+
+    .page-admin-classes .classes-pagination .secondary-button {
+        padding: 7px 8px;
+    }
+}
+
+@media (max-width: 420px) {
+    .page-admin-classes .classes-page-content .classes-toolbar {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .page-admin-classes .classes-page-content .classes-search {
+        grid-column: auto;
+    }
+
+    .page-admin-classes .classes-pagination {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+}
+.page-admin-classes .dashboard-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+.page-admin-classes .dashboard-header p {
+    display: none;
+}

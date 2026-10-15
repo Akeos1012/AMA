@@ -1,7 +1,6 @@
 import React from "react";
 import SectionPage from "../../components/SectionPage.jsx";
 import AdminNavigation from "../../components/navigation/AdminNavigation.jsx";
-import "../../styles/admin.css";
 
 const sectionByPath = {
   "/admin/classes": "Classes",

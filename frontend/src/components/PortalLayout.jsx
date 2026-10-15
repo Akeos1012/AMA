@@ -1,7 +1,10 @@
 import React from "react";
+import "./PortalLayout.css";
+import "./navigation/SidebarNavigation.css";
 
 export default function PortalLayout({
   role,
+  pageClassName,
   title,
   description,
   headerAction,
@@ -9,7 +12,9 @@ export default function PortalLayout({
   children,
 }) {
   return (
-    <div className="dashboard">
+    <div
+      className={`dashboard dashboard-${role}${pageClassName ? ` ${pageClassName}` : ""}`}
+    >
       <aside className="sidebar">
         <div className="sidebar-header">
           <h1>AMA LMS</h1>

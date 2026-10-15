@@ -1,3 +1,4 @@
 fastapi
+email-validator
 firebase-admin
 uvicorn
