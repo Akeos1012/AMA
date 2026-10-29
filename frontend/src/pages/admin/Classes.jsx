@@ -7,7 +7,7 @@ import {
 import { authenticatedFetch } from "../../services/api.js";
 import PortalLayout from "../../components/PortalLayout.jsx";
 import AdminNavigation from "../../components/navigation/AdminNavigation.jsx";
-import { classGrades, mockClasses } from "./classesMockData.js";
+import { classGrades } from "./classesMockData.js";
 import { parseClassStudentsCsv } from "./classes/classCsv.js";
 import ClassFormDialog from "./classes/ClassFormDialog.jsx";
 import ClassStudentsDialog from "./classes/ClassStudentsDialog.jsx";
@@ -16,8 +16,8 @@ import "./Classes.css";
 
 const USERS_ENDPOINT = "/api/admin/users";
 const SUBJECTS_ENDPOINT = "/api/admin/subjects";
+const CLASSES_ENDPOINT = "/api/admin/classes";
 const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-const CLASSES_STORAGE_KEY = "ama-lms-admin-classes";
 const SELECTED_CLASS_STORAGE_KEY = "ama-lms-admin-selected-class";
 const CLASSES_PER_PAGE = 10;
 
@@ -36,48 +36,68 @@ const emptyScheduleForm = {
   teacherId: "",
 };
 
-function loadStoredClasses() {
+function loadSelectedClassId() {
   try {
-    const storedClasses = window.localStorage.getItem(CLASSES_STORAGE_KEY);
-    if (!storedClasses) return mockClasses;
-
-    const parsedClasses = JSON.parse(storedClasses);
-    if (
-      !Array.isArray(parsedClasses) ||
-      parsedClasses.some(
-        (schoolClass) =>
-          !schoolClass ||
-          typeof schoolClass.id !== "string" ||
-          typeof schoolClass.gradeLevel !== "string" ||
-          typeof schoolClass.section !== "string" ||
-          typeof schoolClass.teacherId !== "string" ||
-          !Array.isArray(schoolClass.students),
-      )
-    ) {
-      throw new Error("Saved class data has an invalid format.");
-    }
-    return parsedClasses;
+    return window.localStorage.getItem(SELECTED_CLASS_STORAGE_KEY) ?? "";
   } catch (error) {
-    console.error("Could not load saved class data:", error);
-    return mockClasses;
+    console.error("Could not load the saved class selection:", error);
+    return "";
   }
 }
 
-function loadSelectedClassId() {
-  try {
-    return (
-      window.localStorage.getItem(SELECTED_CLASS_STORAGE_KEY) ??
-      loadStoredClasses()[0]?.id ??
-      ""
+async function requestJson(user, endpoint, options = {}) {
+  const response = await authenticatedFetch(user, endpoint, options);
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      typeof result?.detail === "string"
+        ? result.detail
+        : `Request failed (${response.status}).`,
     );
-  } catch (error) {
-    console.error("Could not load the saved class selection:", error);
-    return loadStoredClasses()[0]?.id ?? "";
   }
+  return result;
+}
+
+function toUiClass(record, memberships, accounts) {
+  const accountsByUid = new Map(accounts.map((account) => [account.uid, account]));
+  const students = memberships
+    .filter((membership) => membership.status === "active")
+    .map((membership) => {
+      const account = accountsByUid.get(membership.student_uid);
+      return {
+        id: account?.student_id || membership.student_uid,
+        uid: membership.student_uid,
+        membershipId: membership.id,
+        name: account?.display_name || account?.name || membership.student_uid,
+        email: account?.email || "",
+        sex: account?.sex,
+      };
+    });
+
+  return {
+    id: record.id,
+    name: record.name,
+    gradeLevel: record.grade_level,
+    section: record.section,
+    teacherId: record.lead_teacher_uid || "",
+    status: record.status === "active" ? "Active" : "Inactive",
+    students,
+    schedule: (record.schedule || []).map((entry) => ({
+      id: entry.id,
+      day: entry.day,
+      startTime: entry.start_time,
+      endTime: entry.end_time,
+      subjectId: entry.subject_id,
+      teacherId: entry.teacher_uid,
+    })),
+  };
 }
 
 export default function Classes() {
-  const [classes, setClasses] = useState(loadStoredClasses);
+  const [classes, setClasses] = useState([]);
+  const [classesLoading, setClassesLoading] = useState(true);
+  const [classesError, setClassesError] = useState("");
+  const [accounts, setAccounts] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [teachersLoading, setTeachersLoading] = useState(true);
   const [teachersError, setTeachersError] = useState("");
@@ -94,6 +114,7 @@ export default function Classes() {
   const [form, setForm] = useState(emptyClassForm);
   const [formError, setFormError] = useState("");
   const [pageMessage, setPageMessage] = useState("");
+  const [pageError, setPageError] = useState("");
   const [studentsClassId, setStudentsClassId] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [csvPreview, setCsvPreview] = useState(null);
@@ -103,6 +124,11 @@ export default function Classes() {
   const [scheduleError, setScheduleError] = useState("");
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [deletingClass, setDeletingClass] = useState(null);
+  const [isSavingClass, setIsSavingClass] = useState(false);
+  const [isSavingSchedule, setIsSavingSchedule] = useState(false);
+  const [studentMutationUid, setStudentMutationUid] = useState("");
+  const [isDeactivatingClass, setIsDeactivatingClass] = useState(false);
+  const [assignmentSyncClassId, setAssignmentSyncClassId] = useState("");
 
   const loadSubjects = useCallback(async (user) => {
     setSubjectsLoading(true);
@@ -141,6 +167,7 @@ export default function Classes() {
         throw new Error("The teacher account response was not a list.");
       }
 
+      setAccounts(users);
       setTeachers(
         users
           .filter((account) => account.role === "teacher")
@@ -148,17 +175,50 @@ export default function Classes() {
             uid: account.uid,
             display_name:
               account.display_name || account.name || account.email || "",
-            disabled: Boolean(account.disabled),
+            disabled:
+              Boolean(account.disabled) || account.profile_status !== "active",
           }))
           .filter((teacher) => teacher.uid),
       );
+      return users;
     } catch (error) {
       console.error("Could not load class teacher accounts:", error);
       setTeachersError(
         "Unable to load teacher accounts. Please try again.",
       );
+      return [];
     } finally {
       setTeachersLoading(false);
+    }
+  }, []);
+
+  const loadClasses = useCallback(async (user, accountList) => {
+    setClassesLoading(true);
+    setClassesError("");
+    try {
+      const records = await requestJson(user, CLASSES_ENDPOINT);
+      if (!Array.isArray(records)) {
+        throw new Error("The class response was not a list.");
+      }
+      const classData = await Promise.all(
+        records.map(async (record) => {
+          const memberships = await requestJson(
+            user,
+            `${CLASSES_ENDPOINT}/${encodeURIComponent(record.id)}/memberships`,
+          );
+          if (!Array.isArray(memberships)) {
+            throw new Error("A class membership response was not a list.");
+          }
+          return toUiClass(record, memberships, accountList);
+        }),
+      );
+      setClasses(classData);
+    } catch (error) {
+      console.error("Could not load classes:", error);
+      setClassesError(error.message || "Unable to load classes. Please retry.");
+      setClasses([]);
+    } finally {
+      setClassesLoading(false);
     }
   }, []);
 
@@ -170,14 +230,17 @@ export default function Classes() {
           window.location.replace("/login");
           return;
         }
-
         try {
           const tokenResult = await getIdTokenResult(user, true);
           if (tokenResult.claims.role !== "admin") {
             window.location.replace("/login?notice=unconfigured");
             return;
           }
-          await Promise.all([loadTeachers(user), loadSubjects(user)]);
+          const [userAccounts] = await Promise.all([
+            loadTeachers(user),
+            loadSubjects(user),
+          ]);
+          await loadClasses(user, userAccounts);
         } catch (error) {
           console.error("Admin authentication check failed:", error);
           window.location.replace("/login");
@@ -190,7 +253,7 @@ export default function Classes() {
     );
 
     return unsubscribe;
-  }, [loadSubjects, loadTeachers]);
+  }, [loadClasses, loadSubjects, loadTeachers]);
 
   const filteredClasses = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -245,12 +308,13 @@ export default function Classes() {
 
   useEffect(() => {
     if (
+      !classesLoading &&
       selectedClassId &&
       !classes.some((schoolClass) => schoolClass.id === selectedClassId)
     ) {
       setSelectedClassId("");
     }
-  }, [classes, selectedClassId]);
+  }, [classes, classesLoading, selectedClassId]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -259,17 +323,6 @@ export default function Classes() {
   useEffect(() => {
     if (currentPage > pageCount) setCurrentPage(pageCount);
   }, [currentPage, pageCount]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(CLASSES_STORAGE_KEY, JSON.stringify(classes));
-    } catch (error) {
-      console.error("Could not save class data locally:", error);
-      setPageMessage(
-        "Class changes could not be saved in this browser. Please check browser storage.",
-      );
-    }
-  }, [classes]);
 
   useEffect(() => {
     try {
@@ -291,6 +344,7 @@ export default function Classes() {
     setForm(emptyClassForm);
     setFormError("");
     setPageMessage("");
+    setPageError("");
     setIsModalOpen(true);
   }
 
@@ -304,10 +358,12 @@ export default function Classes() {
     });
     setFormError("");
     setPageMessage("");
+    setPageError("");
     setIsModalOpen(true);
   }
 
   function closeDialog() {
+    if (isSavingClass) return;
     setIsModalOpen(false);
     setFormError("");
   }
@@ -317,9 +373,10 @@ export default function Classes() {
     setForm((currentForm) => ({ ...currentForm, [name]: value }));
   }
 
-  function handleSaveClass(event) {
+  async function handleSaveClass(event) {
     event.preventDefault();
     setFormError("");
+    setPageError("");
 
     if (teachersLoading || teachersError) {
       setFormError("Load teacher accounts before saving this class.");
@@ -331,13 +388,11 @@ export default function Classes() {
     const selectedTeacher = teachers.find(
       (teacher) => teacher.uid === form.teacherId,
     );
-    const keepsExistingAssignment =
-      Boolean(editingClassId) && existingClass?.teacherId === form.teacherId;
     if (
-      (!selectedTeacher && !keepsExistingAssignment) ||
-      (selectedTeacher?.disabled && !keepsExistingAssignment)
+      form.teacherId &&
+      (!selectedTeacher || selectedTeacher.disabled)
     ) {
-      setFormError("Select an active teacher account for this class.");
+      setFormError("Select an active teacher account as the class adviser.");
       return;
     }
 
@@ -354,29 +409,52 @@ export default function Classes() {
       return;
     }
 
-    const updatedClass = {
-      id: editingClassId ?? `class-${Date.now()}`,
-      gradeLevel: form.gradeLevel,
+    const body = {
+      name: `${form.gradeLevel} - ${section}`,
+      grade_level: form.gradeLevel,
       section,
-      teacherId: selectedTeacher?.uid ?? existingClass?.teacherId ?? "",
-      status: form.status,
-      students: existingClass?.students ?? [],
+      lead_teacher_uid: selectedTeacher?.uid ?? null,
+      status: form.status.toLowerCase(),
     };
 
-    if (editingClassId) {
-      setClasses((currentClasses) =>
-        currentClasses.map((schoolClass) =>
-          schoolClass.id === editingClassId ? updatedClass : schoolClass,
-        ),
+    setIsSavingClass(true);
+    try {
+      const saved = await requestJson(
+        auth.currentUser,
+        editingClassId
+          ? `${CLASSES_ENDPOINT}/${encodeURIComponent(editingClassId)}`
+          : CLASSES_ENDPOINT,
+        {
+          method: editingClassId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
       );
-      setPageMessage("Class updated.");
-    } else {
-      setClasses((currentClasses) => [...currentClasses, updatedClass]);
-      setPageMessage("Class created.");
+      const updatedClass = {
+        ...toUiClass(saved, [], accounts),
+        students: existingClass?.students ?? [],
+      };
+      setClasses((currentClasses) =>
+        editingClassId
+          ? currentClasses.map((schoolClass) =>
+              schoolClass.id === editingClassId ? updatedClass : schoolClass,
+            )
+          : [...currentClasses, updatedClass],
+      );
+      setSelectedClassId(updatedClass.id);
+      setPageMessage(
+        editingClassId
+          ? "Class updated successfully."
+          : "Class created successfully.",
+      );
+      setIsModalOpen(false);
+      setFormError("");
+    } catch (error) {
+      console.error("Could not save class:", error);
+      setFormError(error.message || "Unable to save this class.");
+    } finally {
+      setIsSavingClass(false);
     }
-
-    setSelectedClassId(updatedClass.id);
-    closeDialog();
   }
 
   function openStudents(schoolClass) {
@@ -406,39 +484,107 @@ export default function Classes() {
     }
   }
 
-  function importCsvStudents() {
+  async function importCsvStudents() {
     if (!studentsClass || !csvPreview?.length || csvErrors.length) return;
-    setClasses((currentClasses) =>
-      currentClasses.map((schoolClass) =>
-        schoolClass.id === studentsClass.id
-          ? {
-              ...schoolClass,
-              students: [...schoolClass.students, ...csvPreview],
-            }
-          : schoolClass,
-      ),
-    );
+    setPageError("");
+
+    const resolvedStudents = csvPreview.map((student) => {
+      const matches = accounts.filter(
+        (account) =>
+          account.role === "student" &&
+          account.student_id?.trim().toLowerCase() ===
+            student.id.trim().toLowerCase(),
+      );
+      if (matches.length !== 1) {
+        return {
+          error: `Student ID ${student.id} does not match exactly one registered student account.`,
+        };
+      }
+      const [account] = matches;
+      if (
+        account.disabled ||
+        account.email?.trim().toLowerCase() !==
+          student.email.trim().toLowerCase()
+      ) {
+        return {
+          error: `Student ID ${student.id} must match an active account and its registered email.`,
+        };
+      }
+      return { student, account };
+    });
+    const resolutionErrors = resolvedStudents
+      .filter((entry) => entry.error)
+      .map((entry) => entry.error);
+    if (resolutionErrors.length) {
+      setCsvErrors(resolutionErrors);
+      return;
+    }
+
+    let importedCount = 0;
+    for (const { account, student } of resolvedStudents) {
+      try {
+        await requestJson(
+          auth.currentUser,
+          `${CLASSES_ENDPOINT}/${encodeURIComponent(studentsClass.id)}/memberships`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              class_id: studentsClass.id,
+              student_uid: account.uid,
+              status: "active",
+            }),
+          },
+        );
+        importedCount += 1;
+      } catch (error) {
+        console.error("Could not save an imported student membership:", error);
+        await loadClasses(auth.currentUser, accounts);
+        setCsvErrors([
+          `Saved ${importedCount} of ${resolvedStudents.length} memberships. The remaining import stopped: ${error.message}`,
+        ]);
+        return;
+      }
+    }
+
+    await loadClasses(auth.currentUser, accounts);
     setPageMessage(
-      `${csvPreview.length} students added to ${studentsClass.gradeLevel} - ${studentsClass.section}. Changes are temporary.`,
+      `${importedCount} students added to ${studentsClass.gradeLevel} - ${studentsClass.section}.`,
     );
     setCsvPreview(null);
     setCsvErrors([]);
   }
 
-  function removeStudent(studentId) {
-    if (!studentsClass) return;
-    setClasses((currentClasses) =>
-      currentClasses.map((schoolClass) =>
-        schoolClass.id === studentsClass.id
-          ? {
-              ...schoolClass,
-              students: schoolClass.students.filter(
-                (student) => student.id !== studentId,
-              ),
-            }
-          : schoolClass,
-      ),
-    );
+  async function removeStudent(student) {
+    if (!studentsClass || !student?.membershipId || !student.uid) return;
+    setStudentMutationUid(student.uid);
+    setPageError("");
+    setPageMessage("");
+    try {
+      await requestJson(
+        auth.currentUser,
+        `${CLASSES_ENDPOINT}/${encodeURIComponent(studentsClass.id)}/memberships/${encodeURIComponent(student.membershipId)}`,
+        { method: "DELETE" },
+      );
+      setClasses((currentClasses) =>
+        currentClasses.map((schoolClass) =>
+          schoolClass.id === studentsClass.id
+            ? {
+                ...schoolClass,
+                students: schoolClass.students.filter(
+                  (currentStudent) => currentStudent.uid !== student.uid,
+                ),
+              }
+            : schoolClass,
+        ),
+      );
+      setPageMessage(`${student.name} was removed from the class.`);
+    } catch (error) {
+      console.error("Could not remove student membership:", error);
+      setPageError(error.message || "Unable to remove the student.");
+    } finally {
+      setStudentMutationUid("");
+    }
   }
 
   function getScheduleSubjects(schoolClass, scheduleId = editingScheduleId) {
@@ -454,8 +600,13 @@ export default function Classes() {
   }
 
   function openScheduleDialog(schoolClass, schedule = null) {
+    setPageError("");
+    if (schoolClass.status !== "Active") {
+      setPageError("Reactivate this class before editing its schedule.");
+      return;
+    }
     if (subjectsLoading || teachersLoading || subjectsError || teachersError) {
-      setPageMessage(
+      setPageError(
         subjectsLoading
           ? "Subjects are still loading."
           : teachersLoading
@@ -480,7 +631,81 @@ export default function Classes() {
     setIsScheduleModalOpen(true);
   }
 
+  async function persistSchedule(schoolClass, schedule) {
+    const schedulePayload = schedule.map((entry) => ({
+      id: entry.id,
+      day: entry.day,
+      start_time: entry.startTime,
+      end_time: entry.endTime,
+      subject_id: entry.subjectId,
+      teacher_uid: entry.teacherId,
+    }));
+    const savedClass = await requestJson(
+      auth.currentUser,
+      `${CLASSES_ENDPOINT}/${encodeURIComponent(schoolClass.id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ schedule: schedulePayload }),
+      },
+    );
+
+    try {
+      const endpoint = `${CLASSES_ENDPOINT}/${encodeURIComponent(schoolClass.id)}/teacher-assignments`;
+      const assignments = await requestJson(auth.currentUser, endpoint);
+      if (!Array.isArray(assignments)) {
+        throw new Error("The teacher assignment response was not a list.");
+      }
+
+      const desired = new Map(
+        schedule.map((entry) => [
+          JSON.stringify([entry.subjectId, entry.teacherId]),
+          entry,
+        ]),
+      );
+      const existing = new Map(
+        assignments.map((assignment) => [
+          JSON.stringify([assignment.subject_id, assignment.teacher_uid]),
+          assignment,
+        ]),
+      );
+
+      for (const [key, entry] of desired) {
+        if (existing.get(key)?.status === "active") continue;
+        await requestJson(auth.currentUser, endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            class_id: schoolClass.id,
+            subject_id: entry.subjectId,
+            teacher_uid: entry.teacherId,
+            status: "active",
+          }),
+        });
+      }
+
+    } catch (error) {
+      setAssignmentSyncClassId(schoolClass.id);
+      await loadClasses(auth.currentUser, accounts);
+      throw new Error(
+        `Schedule details were saved, but teacher assignments could not be fully synchronized: ${error.message}`,
+      );
+    }
+
+    setAssignmentSyncClassId("");
+    const updatedClass = {
+      ...toUiClass(savedClass, [], accounts),
+      students: schoolClass.students,
+    };
+    setClasses((currentClasses) =>
+      currentClasses.map((currentClass) =>
+        currentClass.id === updatedClass.id ? updatedClass : currentClass,
+      ),
+    );
+  }
+
   function closeScheduleDialog() {
+    if (isSavingSchedule) return;
     setIsScheduleModalOpen(false);
     setScheduleError("");
     setEditingScheduleId(null);
@@ -495,7 +720,7 @@ export default function Classes() {
     }));
   }
 
-  function saveScheduleEntry(event) {
+  async function saveScheduleEntry(event) {
     event.preventDefault();
     setScheduleError("");
     if (!selectedClass) return;
@@ -552,53 +777,100 @@ export default function Classes() {
       id: editingScheduleId ?? `schedule-${Date.now()}`,
       ...scheduleForm,
     };
-    setClasses((currentClasses) =>
-      currentClasses.map((schoolClass) =>
-        schoolClass.id === selectedClass.id
-          ? {
-              ...schoolClass,
-              schedule: editingScheduleId
-                ? (schoolClass.schedule ?? []).map((currentEntry) =>
-                    currentEntry.id === editingScheduleId ? entry : currentEntry,
-                  )
-                : [...(schoolClass.schedule ?? []), entry],
-            }
-          : schoolClass,
-      ),
-    );
-    closeScheduleDialog();
+    const updatedSchedule = editingScheduleId
+      ? (selectedClass.schedule ?? []).map((currentEntry) =>
+          currentEntry.id === editingScheduleId ? entry : currentEntry,
+        )
+      : [...(selectedClass.schedule ?? []), entry];
+    setIsSavingSchedule(true);
+    try {
+      await persistSchedule(selectedClass, updatedSchedule);
+      setPageMessage(
+        editingScheduleId
+          ? "Schedule updated. Section assignments remain managed in Subjects."
+          : "Schedule saved. Its teacher was assigned to this section.",
+      );
+      setIsScheduleModalOpen(false);
+      setEditingScheduleId(null);
+      setScheduleError("");
+    } catch (error) {
+      console.error("Could not save class schedule:", error);
+      setScheduleError(error.message || "Unable to save the class schedule.");
+    } finally {
+      setIsSavingSchedule(false);
+    }
   }
 
-  function deleteScheduleEntry(entryId) {
-    if (!selectedClass) return;
-    setClasses((currentClasses) =>
-      currentClasses.map((schoolClass) =>
-        schoolClass.id === selectedClass.id
-          ? {
-              ...schoolClass,
-              schedule: (schoolClass.schedule ?? []).filter(
-                (entry) => entry.id !== entryId,
-              ),
-            }
-          : schoolClass,
-      ),
-    );
+  async function deleteScheduleEntry(entryId) {
+    if (!selectedClass || isSavingSchedule) return;
+    setIsSavingSchedule(true);
+    setPageError("");
+    try {
+      await persistSchedule(
+        selectedClass,
+        selectedClass.schedule.filter((entry) => entry.id !== entryId),
+      );
+      setPageMessage(
+        "Schedule removed. The section assignment remains active until deactivated in Subjects.",
+      );
+    } catch (error) {
+      console.error("Could not delete class schedule:", error);
+      setPageError(error.message || "Unable to remove the class schedule.");
+    } finally {
+      setIsSavingSchedule(false);
+    }
   }
 
-  function deleteSelectedSection() {
-    if (!deletingClass) return;
-    setClasses((currentClasses) =>
-      currentClasses.filter(
-        (schoolClass) => schoolClass.id !== deletingClass.id,
-      ),
-    );
-    setSelectedClassId((currentId) =>
-      currentId === deletingClass.id ? "" : currentId,
-    );
-    setDeletingClass(null);
-    setPageMessage(
-      `${deletingClass.gradeLevel} - ${deletingClass.section} was removed. Students and accounts were not deleted.`,
-    );
+  async function retryScheduleAssignmentSync() {
+    if (!selectedClass || isSavingSchedule) return;
+    setIsSavingSchedule(true);
+    setPageError("");
+    try {
+      await persistSchedule(selectedClass, selectedClass.schedule);
+      setPageMessage("Schedule and teacher assignments synchronized.");
+    } catch (error) {
+      console.error("Could not retry teacher assignment synchronization:", error);
+      setPageError(error.message || "Unable to synchronize teacher assignments.");
+    } finally {
+      setIsSavingSchedule(false);
+    }
+  }
+
+  async function deleteSelectedSection() {
+    if (!deletingClass || isDeactivatingClass) return;
+    setPageError("");
+    setIsDeactivatingClass(true);
+    try {
+      const saved = await requestJson(
+        auth.currentUser,
+        `${CLASSES_ENDPOINT}/${encodeURIComponent(deletingClass.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "inactive" }),
+        },
+      );
+      setClasses((currentClasses) =>
+        currentClasses.map((schoolClass) =>
+          schoolClass.id === deletingClass.id
+            ? {
+                ...schoolClass,
+                ...toUiClass(saved, [], accounts),
+                students: schoolClass.students,
+              }
+            : schoolClass,
+        ),
+      );
+      setDeletingClass(null);
+      setPageMessage(
+        `${deletingClass.gradeLevel} - ${deletingClass.section} was deactivated. Its records were retained.`,
+      );
+    } catch (error) {
+      console.error("Could not deactivate class:", error);
+      setPageError(error.message || "Unable to deactivate this class.");
+    } finally {
+      setIsDeactivatingClass(false);
+    }
   }
 
   return (
@@ -612,6 +884,7 @@ export default function Classes() {
         <button
           type="button"
           className="primary-button"
+          disabled={classesLoading || Boolean(classesError)}
           onClick={openCreateDialog}
         >
           Create Class
@@ -623,6 +896,35 @@ export default function Classes() {
       {pageMessage && (
         <p className="form-message success classes-page-message" role="status">
           {pageMessage}
+        </p>
+      )}
+      {pageError && (
+        <p className="form-message error classes-page-message" role="alert">
+          {pageError}{" "}
+          {assignmentSyncClassId === selectedClass?.id && (
+            <button
+              type="button"
+              className="classes-retry-button"
+              disabled={isSavingSchedule}
+              onClick={retryScheduleAssignmentSync}
+            >
+              Retry assignment sync
+            </button>
+          )}
+        </p>
+      )}
+      {classesError && (
+        <p className="form-message error classes-teacher-error" role="alert">
+          {classesError}{" "}
+          <button
+            type="button"
+            className="classes-retry-button"
+            onClick={() => {
+              if (auth.currentUser) loadClasses(auth.currentUser, accounts);
+            }}
+          >
+            Retry classes
+          </button>
         </p>
       )}
       {teachersError && (
@@ -701,7 +1003,15 @@ export default function Classes() {
             </span>
           </div>
 
-          {filteredClasses.length === 0 ? (
+          {classesLoading ? (
+            <div className="empty-state classes-empty-state">
+              <p>Loading classes...</p>
+            </div>
+          ) : classesError ? (
+            <div className="empty-state classes-empty-state">
+              <p>Class data could not be loaded.</p>
+            </div>
+          ) : filteredClasses.length === 0 ? (
             <div className="empty-state classes-empty-state">
               <p>No classes match these filters.</p>
             </div>
@@ -772,9 +1082,10 @@ export default function Classes() {
                           <button
                             type="button"
                             className="class-edit-button class-delete-button"
+                            disabled={schoolClass.status === "Inactive"}
                             onClick={() => setDeletingClass(schoolClass)}
                           >
-                            Delete
+                            Deactivate
                           </button>
                         </td>
                       </tr>
@@ -882,7 +1193,8 @@ export default function Classes() {
                   disabled={
                     subjectsLoading ||
                     teachersLoading ||
-                    Boolean(subjectsError || teachersError)
+                    Boolean(subjectsError || teachersError) ||
+                    selectedClass.status !== "Active"
                   }
                 >
                   Add Schedule
@@ -921,6 +1233,7 @@ export default function Classes() {
                                 <button
                                   type="button"
                                   className="class-edit-button"
+                                  disabled={isSavingSchedule}
                                   onClick={() =>
                                     openScheduleDialog(selectedClass, entry)
                                   }
@@ -930,6 +1243,10 @@ export default function Classes() {
                                 <button
                                   type="button"
                                   className="class-edit-button class-delete-button"
+                                  disabled={
+                                    isSavingSchedule ||
+                                    selectedClass.status !== "Active"
+                                  }
                                   onClick={() => deleteScheduleEntry(entry.id)}
                                 >
                                   Delete
@@ -964,6 +1281,7 @@ export default function Classes() {
         onClose={() => setStudentsClassId("")}
         onCsvFile={handleCsvFile}
         onRemoveStudent={removeStudent}
+        studentMutationUid={studentMutationUid}
         csvPreview={csvPreview}
         csvErrors={csvErrors}
         onCloseCsvPreview={() => {
@@ -977,6 +1295,7 @@ export default function Classes() {
         <ClassScheduleDialog
           selectedClass={selectedClass}
           editingScheduleId={editingScheduleId}
+          isSaving={isSavingSchedule}
           scheduleError={scheduleError}
           scheduleForm={scheduleForm}
           weekdays={weekdays}
@@ -1001,9 +1320,9 @@ export default function Classes() {
           >
             <div className="modal-header">
               <div>
-                <h3 id="delete-class-title">Delete Section?</h3>
+                <h3 id="delete-class-title">Deactivate Class?</h3>
                 <p id="delete-class-description">
-                  Are you sure you want to delete{" "}
+                  Are you sure you want to deactivate{" "}
                   <strong>
                     {deletingClass.gradeLevel} - {deletingClass.section}
                   </strong>
@@ -1012,13 +1331,14 @@ export default function Classes() {
               </div>
             </div>
             <p className="class-delete-warning">
-              This action cannot be undone. Students and teacher accounts will
-              not be deleted. This demo change is temporary.
+              The class and its memberships will be retained. Teachers will no
+              longer see this class until it is reactivated.
             </p>
             <div className="modal-actions class-students-modal-actions">
               <button
                 type="button"
                 className="secondary-button"
+                disabled={isDeactivatingClass}
                 onClick={() => setDeletingClass(null)}
               >
                 Cancel
@@ -1026,9 +1346,10 @@ export default function Classes() {
               <button
                 type="button"
                 className="primary-button class-danger-button"
+                disabled={isDeactivatingClass}
                 onClick={deleteSelectedSection}
               >
-                Delete Section
+                {isDeactivatingClass ? "Deactivating..." : "Deactivate Class"}
               </button>
             </div>
           </section>
@@ -1037,6 +1358,7 @@ export default function Classes() {
 
       <ClassFormDialog
         isOpen={isModalOpen}
+        isSaving={isSavingClass}
         editingClassId={editingClassId}
         form={form}
         formError={formError}

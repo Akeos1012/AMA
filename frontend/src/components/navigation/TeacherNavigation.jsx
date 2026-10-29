@@ -2,6 +2,7 @@ import React from "react";
 
 const links = [
   { label: "Dashboard", path: "/teacher/dashboard" },
+  { label: "My Classes", path: "/teacher/classes" },
   { label: "Lessons", path: "/teacher/lessons" },
   { label: "Quizzes", path: "/teacher/quizzes" },
   { label: "Reports", path: "/teacher/reports" },

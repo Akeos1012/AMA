@@ -1,0 +1,220 @@
+.page-teacher-classes .dashboard-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.page-teacher-classes .dashboard-section {
+  overflow: hidden;
+}
+
+.teacher-class-groups {
+  display: grid;
+  gap: 12px;
+}
+
+.teacher-class-group {
+  padding-top: 20px;
+}
+
+.teacher-class-group > h4 {
+  margin: 0;
+  padding: 0 22px;
+  color: var(--color-text);
+  font-size: 17px;
+}
+
+.teacher-class-group-empty {
+  margin: 10px 22px 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.teacher-class-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  padding: 24px 22px 28px;
+}
+
+.teacher-class-card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: #fff;
+  padding: 18px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+.teacher-class-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.teacher-class-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.teacher-advisory-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #e8f7ef;
+  color: #17653a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.teacher-class-kicker {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.teacher-class-header h4 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.3;
+  color: var(--color-text);
+}
+
+.teacher-class-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: capitalize;
+  background: #edf3ff;
+  color: #1849a9;
+}
+
+.teacher-class-status.inactive {
+  background: #fce7e7;
+  color: #9b1c1c;
+}
+
+.teacher-class-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.teacher-class-meta div {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #fafbfd;
+}
+
+.teacher-class-meta span {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.teacher-class-meta strong {
+  font-size: 18px;
+  color: var(--color-brand);
+}
+
+.teacher-class-schedule,
+.teacher-class-students {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+  margin-top: 16px;
+}
+
+.teacher-class-schedule h5,
+.teacher-class-students h5 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.teacher-class-schedule ul,
+.teacher-class-students ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.teacher-class-schedule li,
+.teacher-class-students li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f7f9fc;
+  color: var(--color-text);
+  margin-bottom: 8px;
+}
+
+.teacher-subject-code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #dfeaff;
+  color: #153a9a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.teacher-class-empty,
+.teacher-class-more {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.teacher-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px 20px;
+  text-align: center;
+}
+
+.teacher-empty-state .primary-button {
+  margin-top: 14px;
+}
+
+@media (max-width: 700px) {
+  .page-teacher-classes .dashboard-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .teacher-class-list {
+    grid-template-columns: 1fr;
+    padding: 20px;
+  }
+
+  .teacher-class-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .teacher-class-badges {
+    justify-content: flex-start;
+  }
+}

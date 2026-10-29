@@ -67,7 +67,7 @@ def validate_grade_levels(grade_levels: list[str]) -> list[str]:
     return cleaned
 
 
-def validate_teacher_ids(teacher_ids: list[str]) -> list[str]:
+def validate_teacher_ids(database, teacher_ids: list[str]) -> list[str]:
     cleaned = list(dict.fromkeys(teacher_id.strip() for teacher_id in teacher_ids))
     if any(not teacher_id for teacher_id in cleaned):
         raise HTTPException(status_code=422, detail="Teacher IDs must not be empty.")
@@ -81,7 +81,14 @@ def validate_teacher_ids(teacher_ids: list[str]) -> list[str]:
                 detail="One or more selected teachers could not be found.",
             ) from None
 
-        if user.disabled or (user.custom_claims or {}).get("role") != "teacher":
+        profile_snapshot = database.collection("users").document(teacher_id).get()
+        profile = profile_snapshot.to_dict() or {}
+        if (
+            user.disabled
+            or (user.custom_claims or {}).get("role") != "teacher"
+            or profile.get("role") != "teacher"
+            or profile.get("status") != "active"
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="Only active teacher accounts can be assigned to subjects.",
@@ -134,7 +141,7 @@ def create_subject(
     name = normalize_subject_name(data.name)
     code = normalize_subject_code(data.code)
     grade_levels = validate_grade_levels(data.grade_levels)
-    teacher_ids = validate_teacher_ids(data.teacher_ids)
+    teacher_ids = validate_teacher_ids(database, data.teacher_ids)
     ensure_unique_code(database, code)
 
     subject_data = {
@@ -162,7 +169,7 @@ def update_subject(
     document = database.collection("subjects").document(subject_id)
     transaction = database.transaction()
     changes = data.dict(exclude_unset=True)
-    add_teacher_ids = validate_teacher_ids(data.add_teacher_ids)
+    add_teacher_ids = validate_teacher_ids(database, data.add_teacher_ids)
     remove_teacher_ids = list(dict.fromkeys(data.remove_teacher_ids))
 
     if set(add_teacher_ids) & set(remove_teacher_ids):

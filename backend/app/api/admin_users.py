@@ -7,7 +7,7 @@ from firebase_admin import auth as firebase_auth, firestore
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ValidationError
 
 from app.api.auth import require_admin
 
@@ -41,6 +41,10 @@ class UserStatusRequest(BaseModel):
     disabled: bool
 
 
+class PasswordResetTargetResponse(BaseModel):
+    email: EmailStr
+
+
 @router.get("/admin/users")
 def list_users(
     decoded_token: dict[str, Any] = Depends(require_admin),
@@ -67,6 +71,7 @@ def list_users(
                 "disabled": user.disabled,
                 "email_verified": user.email_verified,
                 "role": claims.get("role"),
+                "profile_status": profile.get("status"),
                 "created_at": user.user_metadata.creation_timestamp,
                 "student_id": claims.get("student_id"),
                 "employee_id": claims.get("employee_id"),
@@ -78,6 +83,35 @@ def list_users(
         )
 
     return users
+
+
+@router.post(
+    "/admin/users/{uid}/password-reset",
+    response_model=PasswordResetTargetResponse,
+)
+def get_password_reset_target(
+    uid: str,
+    decoded_token: dict[str, Any] = Depends(require_admin),
+) -> PasswordResetTargetResponse:
+    try:
+        user = firebase_auth.get_user(uid)
+    except firebase_auth.UserNotFoundError:
+        raise HTTPException(status_code=404, detail="User account not found.") from None
+
+    role = (user.custom_claims or {}).get("role")
+    if role not in {"student", "teacher"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Password resets are only available for student and teacher accounts.",
+        )
+
+    try:
+        return PasswordResetTargetResponse.model_validate({"email": user.email})
+    except ValidationError:
+        raise HTTPException(
+            status_code=422,
+            detail="The user account does not have a valid registered email address.",
+        ) from None
 
 
 def ensure_editable_user(uid: str) -> tuple[Any, dict[str, Any]]:

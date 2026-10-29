@@ -1,0 +1,245 @@
+.page-admin-teachers .teachers-page-message {
+    margin: 0 0 14px;
+}
+
+.page-admin-teachers .teachers-toolbar {
+    display: grid;
+    grid-template-columns: minmax(240px, 2fr) minmax(180px, 1fr);
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.page-admin-teachers .teachers-toolbar label,
+.page-admin-teachers .teacher-assignment-form label {
+    display: grid;
+    gap: 6px;
+    color: #495057;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.page-admin-teachers .teachers-toolbar input,
+.page-admin-teachers .teachers-toolbar select,
+.page-admin-teachers .teacher-assignment-form select {
+    width: 100%;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--color-control-border);
+    border-radius: 6px;
+    background: var(--color-white);
+    color: var(--color-text);
+    font: inherit;
+    font-weight: 400;
+}
+
+.page-admin-teachers .teachers-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(360px, 1fr);
+    align-items: start;
+    gap: 18px;
+}
+
+.page-admin-teachers .teachers-panel {
+    min-width: 0;
+    overflow: hidden;
+    background: var(--color-white);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+}
+
+.page-admin-teachers .teachers-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.page-admin-teachers .teachers-panel-header > span {
+    color: var(--color-muted);
+    font-size: 13px;
+}
+
+.page-admin-teachers .teachers-table-wrap {
+    overflow-x: auto;
+}
+
+.page-admin-teachers .teachers-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+
+.page-admin-teachers .teachers-table th,
+.page-admin-teachers .teachers-table td {
+    padding: 12px;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 13px;
+    vertical-align: middle;
+}
+
+.page-admin-teachers .teachers-table th {
+    background: #f8f9fa;
+    color: var(--color-muted);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.page-admin-teachers .teachers-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.page-admin-teachers .teachers-table tbody tr:hover,
+.page-admin-teachers .teachers-table tbody tr.selected {
+    background: #fff8f9;
+}
+
+.page-admin-teachers .teacher-select-button {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.page-admin-teachers .teacher-select-button strong,
+.page-admin-teachers .teacher-select-button span,
+.page-admin-teachers .teacher-select-button small {
+    display: block;
+}
+
+.page-admin-teachers .teacher-select-button span,
+.page-admin-teachers .teacher-select-button small {
+    margin-top: 4px;
+    color: var(--color-muted);
+    font-size: 12px;
+}
+
+.page-admin-teachers .teacher-account-status,
+.page-admin-teachers .teacher-assignment-status {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: #e9f7ef;
+    color: #198754;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.page-admin-teachers .teacher-account-status.disabled,
+.page-admin-teachers .teacher-account-status.profile-inactive,
+.page-admin-teachers .teacher-account-status.profile-missing,
+.page-admin-teachers .teacher-assignment-status.unavailable {
+    background: #fff0f0;
+    color: #a52834;
+}
+
+.page-admin-teachers .teacher-details-content {
+    padding: 18px 20px 20px;
+}
+
+.page-admin-teachers .teacher-profile {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.page-admin-teachers .teacher-profile dt {
+    margin-bottom: 4px;
+    color: var(--color-muted);
+    font-size: 12px;
+}
+
+.page-admin-teachers .teacher-profile dd {
+    overflow-wrap: anywhere;
+    font-size: 14px;
+}
+
+.page-admin-teachers .teacher-detail-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 22px 0 10px;
+    padding-top: 16px;
+    border-top: 1px solid var(--color-border);
+}
+
+.page-admin-teachers .teacher-detail-heading h4 {
+    font-size: 14px;
+}
+
+.page-admin-teachers .teacher-detail-heading span,
+.page-admin-teachers .teacher-details-empty,
+.page-admin-teachers .teacher-eligibility-note {
+    color: var(--color-muted);
+    font-size: 13px;
+}
+
+.page-admin-teachers .teacher-advisory-list {
+    list-style: none;
+}
+
+.page-admin-teachers .teacher-advisory-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f1f3;
+    font-size: 13px;
+}
+
+.page-admin-teachers .teacher-advisory-list li span {
+    color: var(--color-muted);
+    text-transform: capitalize;
+}
+
+.page-admin-teachers .assignment-table th,
+.page-admin-teachers .assignment-table td {
+    padding: 10px 8px;
+}
+
+.page-admin-teachers .teacher-assignment-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+}
+
+.page-admin-teachers .teacher-eligibility-note {
+    margin-top: 16px;
+    line-height: 1.5;
+}
+
+.page-admin-teachers .teacher-assignment-modal {
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+}
+
+.page-admin-teachers .teacher-assignment-form {
+    display: grid;
+    gap: 14px;
+    padding: 22px;
+}
+
+.page-admin-teachers .teacher-assignment-form .form-message {
+    margin: 0;
+}
+
+@media (max-width: 1100px) {
+    .page-admin-teachers .teachers-workspace {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 700px) {
+    .page-admin-teachers .teachers-toolbar {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .page-admin-teachers .teacher-profile {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

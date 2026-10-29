@@ -5,12 +5,13 @@ const routes = {
   "/login": lazy(() => import("./pages/Login.jsx")),
   "/admin/dashboard": lazy(() => import("./pages/admin/Dashboard.jsx")),
   "/admin/users": lazy(() => import("./pages/admin/Users.jsx")),
+  "/admin/teachers": lazy(() => import("./pages/admin/Teachers.jsx")),
   "/admin/classes": lazy(() => import("./pages/admin/Classes.jsx")),
   "/admin/subjects": lazy(() => import("./pages/admin/Subjects.jsx")),
-  "/admin/settings": lazy(() => import("./pages/admin/Section.jsx")),
   "/teacher/dashboard": lazy(() => import("./pages/teacher/Dashboard.jsx")),
-  "/teacher/lessons": lazy(() => import("./pages/teacher/Section.jsx")),
-  "/teacher/quizzes": lazy(() => import("./pages/teacher/Section.jsx")),
+  "/teacher/classes": lazy(() => import("./pages/teacher/Classes.jsx")),
+  "/teacher/lessons": lazy(() => import("./pages/teacher/Lessons.jsx")),
+  "/teacher/quizzes": lazy(() => import("./pages/teacher/Quizzes.jsx")),
   "/teacher/reports": lazy(() => import("./pages/teacher/Section.jsx")),
   "/student/dashboard": lazy(() => import("./pages/student/Dashboard.jsx")),
   "/student/lessons": lazy(() => import("./pages/student/Section.jsx")),
@@ -32,7 +33,7 @@ export default function App() {
 
   const normalizedPath =
     pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
-const Page = routes[normalizedPath] ?? routes["/"];
+  const Page = routes[normalizedPath] ?? routes["/"];
 
   return (
     <Suspense fallback={<p>Loading AMA LMS...</p>}>

@@ -93,6 +93,8 @@ function UsersPage() {
   const [editingUser, setEditingUser] = useState(null);
   const [statusUser, setStatusUser] = useState(null);
   const [isUpdatingUser, setIsUpdatingUser] = useState(false);
+  const [resetUser, setResetUser] = useState(null);
+  const [resettingUserUid, setResettingUserUid] = useState("");
   const [csvPreview, setCsvPreview] = useState(null);
   const [csvError, setCsvError] = useState("");
   const csvInputRef = useRef(null);
@@ -445,6 +447,68 @@ function UsersPage() {
       }
     }
 
+    async function confirmPasswordReset() {
+      if (!resetUser || resettingUserUid) return;
+      const targetUser = resetUser;
+      setResettingUserUid(targetUser.uid);
+      setUsersMessage(null);
+
+      try {
+        const adminUser = auth.currentUser;
+        if (!adminUser) {
+          throw new Error("Your session has expired. Sign in again and retry.");
+        }
+
+        const response = await authenticatedFetch(
+          adminUser,
+          `${USERS_ENDPOINT}/${encodeURIComponent(targetUser.uid)}/password-reset`,
+          { method: "POST" },
+        );
+        if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error("Your session has expired. Sign in again and retry.");
+          }
+          if (response.status === 403) {
+            throw new Error("Password resets are not allowed for this account.");
+          }
+          if (response.status === 404) {
+            throw new Error("The user account could not be found.");
+          }
+          throw new Error("Unable to verify the account's registered email.");
+        }
+
+        const target = await response.json();
+        if (typeof target.email !== "string" || !target.email) {
+          throw new Error("The account does not have a valid registered email.");
+        }
+        await sendPasswordResetEmail(auth, target.email);
+        setUsersMessage({
+          type: "success",
+          text: `Password reset email sent to ${targetUser.display_name || "the user"}.`,
+        });
+        setResetUser(null);
+      } catch (error) {
+        console.error("Could not send password reset email.");
+        const firebaseErrorMessages = {
+          "auth/network-request-failed":
+            "Network error while sending the reset email. Please try again.",
+          "auth/too-many-requests":
+            "Too many reset attempts. Wait a while before trying again.",
+          "auth/user-not-found":
+            "The registered account could not be found in Firebase Authentication.",
+        };
+        setUsersMessage({
+          type: "error",
+          text:
+            firebaseErrorMessages[error.code] ||
+            (error.code ? "" : error.message) ||
+            "Unable to send the password reset email. Please try again.",
+        });
+      } finally {
+        setResettingUserUid("");
+      }
+    }
+
     async function handleCsvFileChange(event) {
       const file = event.target.files?.[0];
       event.target.value = "";
@@ -592,19 +656,20 @@ function UsersPage() {
                   <th scope="col">ID</th>
                   <th scope="col">Status</th>
                   <th scope="col">Created</th>
+                  <th scope="col">Password Reset</th>
                   <th scope="col">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {usersLoading ? (
                   <tr>
-                    <td colSpan="7" className="users-table-message">
+                    <td colSpan="8" className="users-table-message">
                       Loading users...
                     </td>
                   </tr>
                 ) : usersError ? (
                   <tr>
-                    <td colSpan="7" className="users-table-message" role="alert">
+                    <td colSpan="8" className="users-table-message" role="alert">
                       {usersError}
                       <button
                         type="button"
@@ -619,7 +684,7 @@ function UsersPage() {
                   </tr>
                 ) : filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan="7" className="users-table-message">
+                    <td colSpan="8" className="users-table-message">
                       No users match your filters.
                     </td>
                   </tr>
@@ -651,6 +716,28 @@ function UsersPage() {
                           </span>
                         </td>
                         <td>{formatCreatedDate(user.created_at)}</td>
+                        <td>
+                          {editable ? (
+                            <button
+                              type="button"
+                              className="users-action-button"
+                              disabled={
+                                Boolean(resettingUserUid) ||
+                                !user.email
+                              }
+                              onClick={() => {
+                                setUsersMessage(null);
+                                setResetUser(user);
+                              }}
+                            >
+                              {resettingUserUid === user.uid
+                                ? "Sending..."
+                                : "Send Reset Email"}
+                            </button>
+                          ) : (
+                            <span aria-label="Not available">—</span>
+                          )}
+                        </td>
                         <td className="users-actions">
                           {editable ? (
                             <>
@@ -735,6 +822,71 @@ function UsersPage() {
       </div>
 
       <div
+        className={`modal-overlay${resetUser ? " active" : ""}`}
+        aria-hidden={!resetUser}
+        onClick={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            !resettingUserUid
+          ) {
+            setResetUser(null);
+          }
+        }}
+      >
+        {resetUser && (
+          <section
+            className="modal users-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="password-reset-title"
+          >
+            <div className="modal-header">
+              <div>
+                <h3 id="password-reset-title">Send Password Reset Email?</h3>
+                <p>
+                  Send a password reset email to{" "}
+                  {resetUser.display_name || resetUser.email}?
+                </p>
+              </div>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="Close"
+                disabled={Boolean(resettingUserUid)}
+                onClick={() => setResetUser(null)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="users-confirm-content">
+              <p>
+                Firebase will send the reset instructions to the account’s
+                registered email address.
+              </p>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={Boolean(resettingUserUid)}
+                  onClick={() => setResetUser(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={Boolean(resettingUserUid)}
+                  onClick={confirmPasswordReset}
+                >
+                  {resettingUserUid ? "Sending..." : "Send Reset Email"}
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+      </div>
+
+      <div
         className={`modal-overlay${statusUser ? " active" : ""}`}
         aria-hidden={!statusUser}
         onClick={(event) => {
@@ -815,16 +967,16 @@ function UsersPage() {
         onClose={() => setCsvPreview(null)}
       />
 
-        {usersMessage && (
-          <p
-            id="users-message"
-            className={`form-message ${usersMessage.type}`}
-            role="status"
-            aria-live="polite"
-          >
-            {usersMessage.text}
-          </p>
-        )}
+      {usersMessage && (
+        <p
+          id="users-message"
+          className={`form-message ${usersMessage.type}`}
+          role="status"
+          aria-live="polite"
+        >
+          {usersMessage.text}
+        </p>
+      )}
     </PortalLayout>
   );
 }

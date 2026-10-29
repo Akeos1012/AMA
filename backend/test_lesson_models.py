@@ -6,13 +6,16 @@ from pydantic import TypeAdapter, ValidationError
 from app.models.lesson import (
     BulletListBlock,
     HeadingBlock,
+    LessonPage,
     LessonContent,
     LessonContentBlock,
     LessonCreateRequest,
     LessonResponse,
     LessonUpdateRequest,
+    PageLessonContent,
     ParagraphBlock,
 )
+from app.extraction.lesson_text import extract_lesson_text
 
 
 BLOCK_ADAPTER = TypeAdapter(LessonContentBlock)
@@ -143,6 +146,205 @@ class LessonContentTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             LessonContent.model_validate(
                 {"blocks": [VALID_BLOCKS[0]], "html": "<p>Unsafe</p>"}
+            )
+
+
+class PageLessonContentTests(unittest.TestCase):
+    def test_page_content_flattens_to_ordered_canonical_blocks(self):
+        page_content = PageLessonContent.model_validate(
+            {
+                "schema_version": 1,
+                "pages": [
+                    {
+                        "id": "page-1",
+                        "elements": [
+                            {
+                                "type": "heading",
+                                "id": "element-1",
+                                "text": "Cell energy",
+                                "level": 1,
+                            },
+                            {
+                                "type": "paragraph",
+                                "id": "element-2",
+                                "text": "ATP stores usable energy for cell processes.",
+                            },
+                            {
+                                "type": "image",
+                                "id": "element-3",
+                                "asset_id": "asset-3",
+                                "alt_text": "Cell diagram",
+                            },
+                        ],
+                    },
+                    {
+                        "id": "page-2",
+                        "elements": [
+                            {
+                                "type": "bullet_list",
+                                "id": "element-4",
+                                "items": ["Cells use ATP during metabolism."],
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+        canonical = page_content.to_canonical_content()
+        self.assertEqual(canonical.schema_version, 1)
+        self.assertEqual(
+            [block.type for block in canonical.blocks],
+            ["heading", "paragraph", "bullet_list"],
+        )
+        self.assertEqual(canonical.blocks[0].text, "Cell energy")
+        self.assertEqual(
+            canonical.blocks[2].items,
+            ["Cells use ATP during metabolism."],
+        )
+
+        extracted = extract_lesson_text(
+            {
+                "id": "lesson-123",
+                "title": "Cell energy",
+                "topic": "ATP",
+                "content": canonical.model_dump(),
+            },
+            min_word_count=1,
+        )
+        self.assertEqual(
+            [passage.block_index for passage in extracted.passages],
+            [0, 1, 2],
+        )
+        self.assertEqual(
+            [passage.block_type for passage in extracted.passages],
+            ["heading", "paragraph", "bullet_list"],
+        )
+
+    def test_page_boundaries_do_not_add_canonical_text_blocks(self):
+        page_content = PageLessonContent(
+            pages=[
+                LessonPage(
+                    id="page-1",
+                    elements=[
+                        {
+                            "type": "paragraph",
+                            "id": "element-1",
+                            "text": "First page text.",
+                        }
+                    ],
+                ),
+                LessonPage(
+                    id="page-2",
+                    elements=[
+                        {
+                            "type": "paragraph",
+                            "id": "element-2",
+                            "text": "Second page text.",
+                        }
+                    ],
+                ),
+            ]
+        )
+
+        canonical = page_content.to_canonical_content()
+        self.assertEqual(len(canonical.blocks), 2)
+        self.assertEqual(
+            [block.text for block in canonical.blocks],
+            ["First page text.", "Second page text."],
+        )
+
+    def test_image_only_page_document_cannot_become_canonical_quiz_text(self):
+        page_content = PageLessonContent(
+            pages=[
+                LessonPage(
+                    id="page-1",
+                    elements=[
+                        {
+                            "type": "image",
+                            "id": "image-1",
+                            "asset_id": "asset-1",
+                            "alt_text": "Diagram",
+                        }
+                    ],
+                )
+            ]
+        )
+
+        with self.assertRaises(ValidationError):
+            page_content.to_canonical_content()
+
+    def test_page_content_rejects_unknown_versions_and_element_fields(self):
+        with self.assertRaises(ValidationError):
+            PageLessonContent.model_validate(
+                {"schema_version": 2, "pages": [{"id": "page-1", "elements": []}]}
+            )
+
+        with self.assertRaises(ValidationError):
+            PageLessonContent.model_validate(
+                {
+                    "schema_version": 1,
+                    "pages": [
+                        {
+                            "id": "page-1",
+                            "elements": [
+                                {
+                                    "type": "image",
+                                    "id": "image-1",
+                                    "asset_id": "asset-1",
+                                    "download_url": "https://example.invalid/file",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
+
+    def test_page_content_requires_unique_page_and_element_ids(self):
+        duplicated_page_ids = {
+            "schema_version": 1,
+            "pages": [
+                {"id": "same-page", "elements": []},
+                {"id": "same-page", "elements": []},
+            ],
+        }
+        duplicated_element_ids = {
+            "schema_version": 1,
+            "pages": [
+                {
+                    "id": "page-1",
+                    "elements": [
+                        {
+                            "type": "paragraph",
+                            "id": "same-element",
+                            "text": "First.",
+                        },
+                        {
+                            "type": "paragraph",
+                            "id": "same-element",
+                            "text": "Second.",
+                        },
+                    ],
+                }
+            ],
+        }
+
+        for value in (duplicated_page_ids, duplicated_element_ids):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                PageLessonContent.model_validate(value)
+
+    def test_legacy_lesson_request_does_not_accept_page_document_as_content(self):
+        request = LessonCreateRequest.model_validate(VALID_CREATE_REQUEST)
+        self.assertEqual(request.content.schema_version, 1)
+        with self.assertRaises(ValidationError):
+            LessonCreateRequest.model_validate(
+                {
+                    **VALID_CREATE_REQUEST,
+                    "content": {
+                        "schema_version": 1,
+                        "pages": [{"id": "page-1", "elements": []}],
+                    },
+                }
             )
 
 

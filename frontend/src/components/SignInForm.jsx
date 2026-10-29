@@ -46,6 +46,9 @@ export default function SignInForm({ variant = "login" }) {
       );
       const tokenResult = await getIdTokenResult(user, true);
 
+      console.log("Signed-in email:", user.email);
+      console.log("Firebase role claim:", tokenResult.claims.role);
+
       if (!user.uid || !tokenResult.token) {
         throw new Error("Firebase did not return an authenticated identity.");
       }

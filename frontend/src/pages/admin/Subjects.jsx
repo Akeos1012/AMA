@@ -90,7 +90,7 @@ export default function Subjects() {
           .map((teacher) => ({
             id: teacher.uid,
             name: teacher.display_name || teacher.email || "Unnamed teacher",
-            active: !teacher.disabled,
+            active: !teacher.disabled && teacher.profile_status === "active",
           }))
           .sort((first, second) => first.name.localeCompare(second.name)),
       );
@@ -174,7 +174,6 @@ export default function Subjects() {
         active: false,
       })),
   ];
-
   function openCreateDialog() {
     setEditingSubjectId(null);
     setForm(emptyForm);
@@ -335,7 +334,7 @@ export default function Subjects() {
       role="admin"
       pageClassName="page-admin-subjects"
       title="Subjects"
-      description="Manage school subjects, grade levels, and teacher assignments."
+      description="Manage curriculum, offered grade levels, and subject-eligible teachers."
       navigation={<AdminNavigation activePath="/admin/subjects" />}
       headerAction={
         <button
@@ -416,7 +415,7 @@ export default function Subjects() {
                   <tr>
                     <th scope="col">Subject</th>
                     <th scope="col">Grade Levels</th>
-                    <th scope="col">Assigned Teachers</th>
+                    <th scope="col">Eligible Teachers</th>
                     <th scope="col">Status</th>
                     <th scope="col">Actions</th>
                   </tr>
@@ -439,7 +438,7 @@ export default function Subjects() {
                           type="button"
                           className="subject-teacher-count"
                           onClick={() => setSelectedSubjectId(subject.id)}
-                          aria-label={`View ${subject.teacher_ids?.length ?? 0} teachers assigned to ${subject.name}`}
+                          aria-label={`View ${subject.teacher_ids?.length ?? 0} teachers eligible for ${subject.name}`}
                         >
                           {subject.teacher_ids?.length ?? 0}{" "}
                           {(subject.teacher_ids?.length ?? 0) === 1
@@ -526,7 +525,7 @@ export default function Subjects() {
                 </div>
               </dl>
               <div className="subject-teachers-heading">
-                <h4>Assigned Teachers</h4>
+                <h4>Subject-Eligible Teachers</h4>
                 <span>{selectedSubject.teacher_ids?.length ?? 0}</span>
               </div>
               {selectedSubject.teacher_ids?.length ? (
@@ -537,7 +536,7 @@ export default function Subjects() {
                 </ul>
               ) : (
                 <p className="subject-teachers-empty">
-                  No teachers are assigned to this subject.
+                  No teachers are marked eligible for this subject.
                 </p>
               )}
               {selectedSubject.status === "inactive" && (

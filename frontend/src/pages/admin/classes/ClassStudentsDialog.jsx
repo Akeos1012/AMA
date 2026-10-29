@@ -8,6 +8,7 @@ export default function ClassStudentsDialog({
   onClose,
   onCsvFile,
   onRemoveStudent,
+  studentMutationUid,
   csvPreview,
   csvErrors,
   onCloseCsvPreview,
@@ -58,8 +59,7 @@ export default function ClassStudentsDialog({
                 </label>
               </div>
               <p className="class-demo-inline-note">
-                Student changes are temporary and are not saved to the school
-                database.
+                Student memberships are managed in the school database.
               </p>
               {visibleStudents.length ? (
                 <div className="class-students-table-wrap">
@@ -89,9 +89,12 @@ export default function ClassStudentsDialog({
                             <button
                               type="button"
                               className="class-edit-button class-delete-button"
-                              onClick={() => onRemoveStudent(student.id)}
+                              disabled={studentMutationUid === student.uid}
+                              onClick={() => onRemoveStudent(student)}
                             >
-                              Remove
+                              {studentMutationUid === student.uid
+                                ? "Removing..."
+                                : "Remove"}
                             </button>
                           </td>
                         </tr>

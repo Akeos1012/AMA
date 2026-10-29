@@ -3,6 +3,7 @@ import React from "react";
 const links = [
   { label: "Dashboard", path: "/admin/dashboard" },
   { label: "Users", path: "/admin/users" },
+  { label: "Teachers", path: "/admin/teachers" },
   { label: "Classes", path: "/admin/classes" },
   { label: "Subjects", path: "/admin/subjects" },
   { label: "Settings", path: "/admin/settings" },

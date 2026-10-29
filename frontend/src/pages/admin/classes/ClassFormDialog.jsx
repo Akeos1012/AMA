@@ -2,6 +2,7 @@ import React from "react";
 
 export default function ClassFormDialog({
   isOpen,
+  isSaving,
   editingClassId,
   form,
   formError,
@@ -32,12 +33,13 @@ export default function ClassFormDialog({
             <h3 id="class-dialog-title">
               {editingClassId ? "Edit Class" : "Create Class"}
             </h3>
-            <p>Set the grade, section, teacher, and status.</p>
+            <p>Set the section, primary class adviser, and status.</p>
           </div>
           <button
             type="button"
             className="modal-close"
             aria-label="Close"
+            disabled={isSaving}
             onClick={onClose}
           >
             &times;
@@ -81,13 +83,12 @@ export default function ClassFormDialog({
             />
           </div>
           <div className="form-group">
-            <label htmlFor="class-teacher">Assigned Teacher</label>
+            <label htmlFor="class-teacher">Primary Class Adviser</label>
             <select
               id="class-teacher"
               name="teacherId"
               value={form.teacherId}
               onChange={onFormChange}
-              required
               disabled={teachersLoading || Boolean(teachersError)}
             >
               <option value="">
@@ -96,13 +97,13 @@ export default function ClassFormDialog({
                   : teachersError
                     ? "Unable to load teachers"
                     : teachers.length
-                      ? "Select teacher"
+                      ? "No adviser assigned"
                       : "No teacher accounts available."}
               </option>
               {form.teacherId &&
                 !teachers.some((teacher) => teacher.uid === form.teacherId) && (
                   <option value={form.teacherId}>
-                    Existing teacher assignment (account unavailable)
+                    Existing adviser assignment (account unavailable)
                   </option>
                 )}
               {teachers
@@ -119,8 +120,8 @@ export default function ClassFormDialog({
             </select>
             {!teachersLoading && !teachersError && teachers.length > 0 && (
               <p className="classes-teacher-help">
-                Disabled accounts are only shown for their existing class
-                assignments.
+                The primary adviser is separate from subject-teacher
+                assignments. Only active teacher accounts may be assigned.
               </p>
             )}
           </div>
@@ -141,6 +142,7 @@ export default function ClassFormDialog({
             <button
               type="button"
               className="secondary-button"
+              disabled={isSaving}
               onClick={onClose}
             >
               Cancel
@@ -148,9 +150,13 @@ export default function ClassFormDialog({
             <button
               type="submit"
               className="primary-button"
-              disabled={teachersLoading || Boolean(teachersError)}
+              disabled={isSaving || teachersLoading || Boolean(teachersError)}
             >
-              {editingClassId ? "Save Changes" : "Create Class"}
+              {isSaving
+                ? "Saving..."
+                : editingClassId
+                  ? "Save Changes"
+                  : "Create Class"}
             </button>
           </div>
         </form>

@@ -32,7 +32,10 @@ export default function SubjectFormDialog({
             <h3 id="subject-dialog-heading">
               {editingSubjectId ? "Edit Subject" : "Add Subject"}
             </h3>
-            <p>Subject assignments use existing teacher accounts.</p>
+            <p>
+              Teacher eligibility for a subject is separate from section
+              assignments.
+            </p>
           </div>
           <button
             type="button"
@@ -111,7 +114,7 @@ export default function SubjectFormDialog({
             </select>
           </div>
           <fieldset className="subject-checkbox-group subject-teacher-options">
-            <legend>Assigned Teachers</legend>
+            <legend>Subject-Eligible Teachers</legend>
             {selectableTeachers.length ? (
               <div className="subject-teacher-checkboxes">
                 {selectableTeachers.map((teacher) => {

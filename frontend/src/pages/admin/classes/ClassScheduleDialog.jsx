@@ -3,6 +3,7 @@ import React from "react";
 export default function ClassScheduleDialog({
   selectedClass,
   editingScheduleId,
+  isSaving,
   scheduleError,
   scheduleForm,
   weekdays,
@@ -37,6 +38,7 @@ export default function ClassScheduleDialog({
             type="button"
             className="modal-close"
             aria-label="Close schedule"
+            disabled={isSaving}
             onClick={onClose}
           >
             &times;
@@ -149,12 +151,21 @@ export default function ClassScheduleDialog({
             <button
               type="button"
               className="secondary-button"
+              disabled={isSaving}
               onClick={onClose}
             >
               Cancel
             </button>
-            <button type="submit" className="primary-button">
-              {editingScheduleId ? "Save Changes" : "Add Schedule"}
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={isSaving}
+            >
+              {isSaving
+                ? "Saving..."
+                : editingScheduleId
+                  ? "Save Changes"
+                  : "Add Schedule"}
             </button>
           </div>
         </form>

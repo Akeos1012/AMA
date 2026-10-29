@@ -8,12 +8,13 @@ from firebase_admin import auth as firebase_auth, firestore
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
-from app.api.auth import require_admin
+from app.api.auth import require_admin, verify_firebase_token
 
 _class_models = importlib.import_module("app.models.class")
 ClassCreateRequest = _class_models.ClassCreateRequest
 ClassResponse = _class_models.ClassResponse
 ClassUpdateRequest = _class_models.ClassUpdateRequest
+ClassScheduleEntry = _class_models.ClassScheduleEntry
 StudentMembershipCreateRequest = _class_models.StudentMembershipCreateRequest
 StudentMembershipResponse = _class_models.StudentMembershipResponse
 TeacherSubjectAssignmentCreateRequest = (
@@ -22,6 +23,7 @@ TeacherSubjectAssignmentCreateRequest = (
 TeacherSubjectAssignmentResponse = _class_models.TeacherSubjectAssignmentResponse
 
 router = APIRouter(dependencies=[Depends(require_admin)])
+teacher_router = APIRouter()
 
 CLASS_COLLECTION = "classes"
 USER_COLLECTION = "users"
@@ -135,6 +137,208 @@ def validate_path_class_id(class_id: str) -> None:
     validate_document_id(class_id, "class ID")
 
 
+def validate_class_schedule(
+    database,
+    status_value: str,
+    grade_level: str,
+    schedule: list[dict[str, Any]],
+) -> None:
+    if schedule and status_value != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Schedules can only be assigned to an active class.",
+        )
+
+    entry_ids: set[str] = set()
+    entries_by_day: dict[str, list[dict[str, Any]]] = {}
+    for entry in schedule:
+        entry_id = entry["id"]
+        if entry_id in entry_ids:
+            raise HTTPException(
+                status_code=422,
+                detail="Schedule entry IDs must be unique within a class.",
+            )
+        entry_ids.add(entry_id)
+        if entry["start_time"] >= entry["end_time"]:
+            raise HTTPException(
+                status_code=422,
+                detail="Schedule end time must be later than start time.",
+            )
+
+        day_entries = entries_by_day.setdefault(entry["day"], [])
+        if any(
+            entry["start_time"] < current["end_time"]
+            and entry["end_time"] > current["start_time"]
+            for current in day_entries
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Schedule entries cannot overlap on the same day.",
+            )
+        day_entries.append(entry)
+
+        subject_snapshot = (
+            database.collection(SUBJECT_COLLECTION)
+            .document(entry["subject_id"])
+            .get()
+        )
+        subject = document_data(subject_snapshot, "Subject")
+        validate_account(database, entry["teacher_uid"], "teacher")
+        validate_teacher_subject(subject, entry["teacher_uid"])
+        validate_subject_class(subject, grade_level)
+
+
+def validate_subject_class(subject: dict[str, Any], grade_level: str) -> None:
+    grade_levels = subject.get("grade_levels", [])
+    if not isinstance(grade_levels, (list, tuple)) or grade_level not in grade_levels:
+        raise HTTPException(
+            status_code=422,
+            detail="The subject is not available for this class's grade level.",
+        )
+
+
+@teacher_router.get("/teacher/classes")
+def list_teacher_classes(
+    decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+) -> list[dict[str, Any]]:
+    teacher_uid = decoded_token.get("uid")
+    if decoded_token.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Insufficient permissions.")
+    if not isinstance(teacher_uid, str) or not teacher_uid:
+        raise HTTPException(status_code=401, detail="Invalid Firebase ID token.")
+
+    validate_document_id(teacher_uid, "teacher ID")
+    database = get_database()
+    validate_account(database, teacher_uid, "teacher")
+
+    class_ids: set[str] = set()
+    for document in database.collection(CLASS_COLLECTION).stream():
+        class_data = document.to_dict() or {}
+        if class_data.get("status") == "active" and class_data.get("lead_teacher_uid") == teacher_uid:
+            class_ids.add(document.id)
+
+    for document in database.collection(ASSIGNMENT_COLLECTION).where(
+        "teacher_uid", "==", teacher_uid
+    ).stream():
+        assignment_data = document.to_dict() or {}
+        if assignment_data.get("status") == "active":
+            class_id = assignment_data.get("class_id")
+            if isinstance(class_id, str):
+                class_ids.add(class_id)
+
+    teacher_classes: list[dict[str, Any]] = []
+    for class_id in sorted(class_ids):
+        class_snapshot = database.collection(CLASS_COLLECTION).document(class_id).get()
+        if not class_snapshot.exists:
+            continue
+        class_data = class_snapshot.to_dict() or {}
+        if class_data.get("status") != "active":
+            continue
+
+        assignment_records = [
+            record.to_dict() or {}
+            for record in database.collection(ASSIGNMENT_COLLECTION)
+            .where("class_id", "==", class_id)
+            .stream()
+        ]
+        subject_entries: list[dict[str, Any]] = []
+        seen_subject_ids: set[str] = set()
+        for assignment in assignment_records:
+            if (
+                assignment.get("status") != "active"
+                or assignment.get("teacher_uid") != teacher_uid
+            ):
+                continue
+            subject_id = assignment.get("subject_id")
+            if not isinstance(subject_id, str) or not subject_id:
+                continue
+            if subject_id in seen_subject_ids:
+                continue
+            seen_subject_ids.add(subject_id)
+
+            subject_snapshot = (
+                database.collection(SUBJECT_COLLECTION).document(subject_id).get()
+            )
+            if not subject_snapshot.exists:
+                continue
+            subject_data = subject_snapshot.to_dict() or {}
+            teacher_uids = subject_data.get("teacher_ids", [])
+            grade_levels = subject_data.get("grade_levels", [])
+            if (
+                subject_data.get("status") != "active"
+                or not isinstance(teacher_uids, (list, tuple))
+                or teacher_uid not in teacher_uids
+                or not isinstance(grade_levels, (list, tuple))
+                or class_data.get("grade_level") not in grade_levels
+            ):
+                continue
+            subject_entries.append(
+                {
+                    "id": subject_id,
+                    "name": subject_data.get("name", ""),
+                    "code": subject_data.get("code", ""),
+                    "teacher_uids": list(subject_data.get("teacher_ids", [])),
+                }
+            )
+
+        if not subject_entries and class_data.get("lead_teacher_uid") != teacher_uid:
+            continue
+
+        membership_records = [
+            record.to_dict() or {}
+            for record in database.collection(MEMBERSHIP_COLLECTION)
+            .where("class_id", "==", class_id)
+            .stream()
+        ]
+        students: list[dict[str, Any]] = []
+        seen_student_uids: set[str] = set()
+        for membership in membership_records:
+            if membership.get("status") != "active":
+                continue
+            student_uid = membership.get("student_uid")
+            if (
+                not isinstance(student_uid, str)
+                or not student_uid
+                or student_uid in seen_student_uids
+            ):
+                continue
+            seen_student_uids.add(student_uid)
+            profile_snapshot = database.collection(USER_COLLECTION).document(student_uid).get()
+            profile = profile_snapshot.to_dict() or {}
+            students.append(
+                {
+                    "uid": student_uid,
+                    "name": profile.get("name") or profile.get("display_name") or student_uid,
+                    "grade_level": profile.get("grade_level"),
+                    "section": profile.get("section"),
+                }
+            )
+
+        teacher_classes.append(
+            {
+                "id": class_id,
+                "name": class_data.get("name", ""),
+                "grade_level": class_data.get("grade_level", ""),
+                "section": class_data.get("section", ""),
+                "status": class_data.get("status", "active"),
+                "lead_teacher_uid": class_data.get("lead_teacher_uid"),
+                "is_adviser": class_data.get("lead_teacher_uid") == teacher_uid,
+                "student_count": len(students),
+                "students": students,
+                "assigned_subjects": subject_entries,
+            }
+        )
+
+    return sorted(
+        teacher_classes,
+        key=lambda item: (
+            str(item.get("grade_level", "")).casefold(),
+            str(item.get("section", "")).casefold(),
+            str(item.get("id", "")).casefold(),
+        ),
+    )
+
+
 @router.get("/admin/classes", response_model=list[ClassResponse])
 def list_classes() -> list[ClassResponse]:
     database = get_database()
@@ -160,6 +364,12 @@ def create_class(data: ClassCreateRequest) -> ClassResponse:
 
     class_ref = database.collection(CLASS_COLLECTION).document()
     class_data = data.model_dump()
+    validate_class_schedule(
+        database,
+        class_data["status"],
+        class_data["grade_level"],
+        class_data["schedule"],
+    )
     class_data.update(
         {
             "created_at": SERVER_TIMESTAMP,
@@ -195,6 +405,20 @@ def update_class(class_id: str, data: ClassUpdateRequest) -> ClassResponse:
     changes = data.model_dump(exclude_unset=True)
     if "lead_teacher_uid" in changes and changes["lead_teacher_uid"] is not None:
         validate_account(database, changes["lead_teacher_uid"], "teacher")
+    if "schedule" in changes or "grade_level" in changes:
+        schedule = changes.get("schedule", current_data.get("schedule", []))
+        schedule = [
+            item.model_dump() if isinstance(item, ClassScheduleEntry) else item
+            for item in schedule
+        ]
+        validate_class_schedule(
+            database,
+            changes.get("status", current_data.get("status", "active")),
+            changes.get("grade_level", current_data.get("grade_level", "")),
+            schedule,
+        )
+        if "schedule" in changes:
+            changes["schedule"] = schedule
     changes["updated_at"] = SERVER_TIMESTAMP
 
     try:
@@ -216,7 +440,7 @@ def validate_assignment_request(
             status_code=422,
             detail="The assignment class_id must match the requested class.",
         )
-    require_active_class(database, class_id)
+    class_data = require_active_class(database, class_id)
     validate_document_id(data.subject_id, "subject ID")
     subject_snapshot = (
         database.collection(SUBJECT_COLLECTION).document(data.subject_id).get()
@@ -225,6 +449,7 @@ def validate_assignment_request(
     validate_account(database, data.teacher_uid, "teacher")
 
     validate_teacher_subject(subject, data.teacher_uid)
+    validate_subject_class(subject, class_data.get("grade_level", ""))
 
 
 def validate_teacher_subject(subject: dict[str, Any], teacher_uid: str) -> None:
@@ -267,6 +492,27 @@ def list_teacher_assignments(class_id: str) -> list[TeacherSubjectAssignmentResp
     )
 
 
+@router.get(
+    "/admin/teacher-assignments",
+    response_model=list[TeacherSubjectAssignmentResponse],
+)
+def list_all_teacher_assignments() -> list[TeacherSubjectAssignmentResponse]:
+    database = get_database()
+    assignments = [
+        assignment_response(document.id, document.to_dict() or {})
+        for document in database.collection(ASSIGNMENT_COLLECTION).stream()
+    ]
+    return sorted(
+        assignments,
+        key=lambda item: (
+            item.teacher_uid,
+            item.class_id,
+            item.subject_id,
+            item.id,
+        ),
+    )
+
+
 @router.post(
     "/admin/classes/{class_id}/teacher-assignments",
     response_model=TeacherSubjectAssignmentResponse,
@@ -304,6 +550,7 @@ def create_teacher_assignment(
                 "Subject",
             )
             validate_teacher_subject(subject, data.teacher_uid)
+            validate_subject_class(subject, class_data.get("grade_level", ""))
 
             profile_ref = database.collection(USER_COLLECTION).document(
                 data.teacher_uid

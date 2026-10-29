@@ -1,26 +1,67 @@
+import logging
+
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Response,
+    UploadFile,
+    status,
+)
 from firebase_admin import auth as firebase_auth, firestore
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from app.api.auth import verify_firebase_token
+from app.ai.client import LLMProviderError
+from app.ai.ollama_client import OllamaClient
+from app.extraction.lesson_text import extract_lesson_text, InsufficientLessonContentError
+from app.extraction.lesson_import import (
+    LessonImportError,
+    PDF_MAX_BYTES,
+    TXT_MAX_BYTES,
+    extract_pdf,
+    extract_txt,
+    text_to_paragraphs,
+)
+from app.models.generation import (
+    GenerateQuizRequestBody,
+    QuizDraft,
+    QuizGenerationRequest,
+)
 from app.models.lesson import (
     LessonCreateRequest,
+    LessonContent,
+    LessonImportPreview,
     LessonResponse,
     LessonUpdateRequest,
 )
+from app.services.quiz_generation_orchestrator import (
+    QuizGenerationOrchestrator,
+    QuizOrchestrationError,
+)
+from app.services.quiz_generation_service import (
+    QuizGenerationService,
+    QuizGenerationServiceError,
+)
+from app.validation.quiz_validator import QuizValidator
 
 router = APIRouter()
 
+logger = logging.getLogger(__name__)
 LESSON_COLLECTION = "lessons"
 USER_COLLECTION = "users"
 CLASS_COLLECTION = "classes"
 SUBJECT_COLLECTION = "subjects"
 ASSIGNMENT_COLLECTION = "class_teacher_assignments"
 MEMBERSHIP_COLLECTION = "class_memberships"
+QUIZ_COLLECTION = "quizzes"
 
 
 def get_database():
@@ -218,6 +259,42 @@ def student_can_read_lesson(
     )
 
 
+def validate_publishable_lesson(lesson: dict[str, Any]) -> None:
+    if not isinstance(lesson.get("title"), str) or not lesson["title"].strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Add a lesson title before publishing.",
+        )
+    if not isinstance(lesson.get("topic"), str) or not lesson["topic"].strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Add a lesson topic before publishing.",
+        )
+    try:
+        content = LessonContent.model_validate(lesson.get("content"))
+    except ValidationError:
+        raise HTTPException(
+            status_code=422,
+            detail="Lesson content is invalid. Review the content blocks before publishing.",
+        ) from None
+
+    text_parts: list[str] = []
+    for block in content.blocks:
+        if block.type == "bullet_list":
+            text_parts.extend(block.items)
+        else:
+            text_parts.append(block.text)
+    if not any(
+        character.isalnum()
+        for text in text_parts
+        for character in text
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Add at least one content block with usable lesson text before publishing.",
+        )
+
+
 @router.post(
     "/lessons",
     response_model=LessonResponse,
@@ -256,6 +333,102 @@ def create_lesson(
         }
     )
     return lesson_response(lesson_ref.id, lesson_ref.get().to_dict() or {})
+
+
+def authorize_lesson_import(
+    decoded_token: dict[str, Any],
+    class_id: str,
+    subject_id: str,
+):
+    teacher_uid = require_role(decoded_token, "teacher")
+    validate_document_id(class_id, "class ID")
+    validate_document_id(subject_id, "subject ID")
+    database = get_database()
+    validate_active_account(database, teacher_uid, "teacher")
+    if not teacher_can_manage_lesson(database, teacher_uid, class_id, subject_id):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized for this class and subject.",
+        )
+
+
+async def read_import_file(
+    file: UploadFile,
+    expected_extension: str,
+    max_bytes: int,
+) -> bytes:
+    filename = file.filename or ""
+    if not filename.lower().endswith(expected_extension):
+        raise HTTPException(
+            status_code=415,
+            detail=f"Choose a {expected_extension} file for this import option.",
+        )
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        message = (
+            "Text files must be 2 MiB or smaller."
+            if expected_extension == ".txt"
+            else "PDF files must be 20 MiB or smaller."
+        )
+        raise HTTPException(status_code=413, detail=message)
+    return data
+
+
+def lesson_import_preview(
+    source_type: str,
+    text: str,
+    page_count: int | None = None,
+) -> LessonImportPreview:
+    return LessonImportPreview(
+        source_type=source_type,
+        text=text,
+        page_count=page_count,
+        paragraph_count=len(text_to_paragraphs(text)),
+    )
+
+
+@router.post(
+    "/lessons/import/txt",
+    response_model=LessonImportPreview,
+)
+async def import_lesson_txt(
+    file: UploadFile = File(...),
+    class_id: str = Form(...),
+    subject_id: str = Form(...),
+    decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+) -> LessonImportPreview:
+    authorize_lesson_import(decoded_token, class_id, subject_id)
+    data = await read_import_file(file, ".txt", TXT_MAX_BYTES)
+    try:
+        text = extract_txt(data)
+    except LessonImportError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=str(exc),
+        ) from None
+    return lesson_import_preview("txt", text)
+
+
+@router.post(
+    "/lessons/import/pdf",
+    response_model=LessonImportPreview,
+)
+async def import_lesson_pdf(
+    file: UploadFile = File(...),
+    class_id: str = Form(...),
+    subject_id: str = Form(...),
+    decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+) -> LessonImportPreview:
+    authorize_lesson_import(decoded_token, class_id, subject_id)
+    data = await read_import_file(file, ".pdf", PDF_MAX_BYTES)
+    try:
+        text, page_count = await run_in_threadpool(extract_pdf, data)
+    except LessonImportError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=str(exc),
+        ) from None
+    return lesson_import_preview("pdf", text, page_count)
 
 
 @router.get("/lessons", response_model=list[LessonResponse])
@@ -394,6 +567,8 @@ def set_publication_status(
     if current_data.get("teacher_id") != teacher_uid:
         raise HTTPException(status_code=404, detail="Lesson not found.")
     require_teacher_lesson_access(database, teacher_uid, current_data)
+    if published:
+        validate_publishable_lesson(current_data)
 
     lesson_ref.update(
         {
@@ -437,3 +612,152 @@ def delete_lesson(
     require_teacher_lesson_access(database, teacher_uid, current_data)
     lesson_ref.delete()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def get_quiz_orchestrator() -> QuizGenerationOrchestrator:
+    client = OllamaClient()
+    service = QuizGenerationService(llm_client=client)
+    validator = QuizValidator()
+    return QuizGenerationOrchestrator(generation_service=service, validator=validator)
+
+
+def quiz_draft_response(quiz_id: str, data: dict[str, Any]) -> QuizDraft:
+    response_data = dict(data)
+    response_data.update(
+        {
+            "id": quiz_id,
+            "created_at": aware_datetime(data.get("created_at"), "created_at"),
+            "updated_at": aware_datetime(data.get("updated_at"), "updated_at"),
+            "published_at": (
+                aware_datetime(data["published_at"], "published_at")
+                if data.get("published_at") is not None
+                else None
+            ),
+        }
+    )
+    try:
+        return QuizDraft.model_validate(response_data)
+    except (TypeError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored quiz draft data is invalid.",
+        ) from exc
+
+
+@router.post(
+    "/lessons/{lesson_id}/generate-quiz",
+    response_model=QuizDraft,
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_quiz_for_lesson(
+    lesson_id: str,
+    body: GenerateQuizRequestBody,
+    decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+    orchestrator: QuizGenerationOrchestrator = Depends(get_quiz_orchestrator),
+) -> QuizDraft:
+    teacher_uid = require_role(decoded_token, "teacher")
+    database = get_database()
+    validate_active_account(database, teacher_uid, "teacher")
+    lesson_id = validate_document_id(lesson_id, "lesson ID")
+
+    _, lesson_data = lesson_snapshot(database, lesson_id)
+    if lesson_data.get("teacher_id") != teacher_uid:
+        raise HTTPException(status_code=404, detail="Lesson not found.")
+    require_teacher_lesson_access(database, teacher_uid, lesson_data)
+
+    try:
+        extracted_lesson = extract_lesson_text(lesson_data)
+    except InsufficientLessonContentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.message,
+        ) from exc
+
+    gen_request = QuizGenerationRequest(
+        lesson_id=lesson_id,
+        question_counts=body.question_counts,
+        instructions=body.instructions,
+    )
+
+    if body.max_attempts is not None:
+        orchestrator.max_attempts = body.max_attempts
+
+    try:
+        result = orchestrator.orchestrate_generation(
+            lesson=extracted_lesson,
+            request=gen_request,
+        )
+    except LLMProviderError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI generation service is currently unavailable. Please try again later.",
+        ) from None
+    except QuizGenerationServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.message,
+        ) from None
+
+    if (
+        not result.success
+        or not result.quiz
+        or not result.validation_report
+        or not result.validation_report.is_valid
+        or result.validation_report.status != "passed"
+    ):
+        if result.validation_report is not None:
+            logger.warning(
+                "Quiz generation failed validation: lesson_id=%s attempts=%s "
+                "status=%s grounding_passed=%s correctness_passed=%s",
+                lesson_id,
+                result.attempts,
+                result.validation_report.status,
+                result.validation_report.grounding_passed,
+                result.validation_report.correctness_passed,
+            )
+        else:
+            logger.warning(
+                "Quiz generation failed without a validation report: lesson_id=%s "
+                "attempts=%s error=%s",
+                lesson_id,
+                result.attempts,
+                result.error_message,
+            )
+        failure_detail = result.error_message or "Quiz generation failed validation requirements."
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=failure_detail,
+        )
+
+    quiz_ref = database.collection(QUIZ_COLLECTION).document()
+    draft_record = {
+        "lesson_id": lesson_id,
+        "class_id": lesson_data.get("class_id"),
+        "subject_id": lesson_data.get("subject_id"),
+        "teacher_id": teacher_uid,
+        "title": result.quiz.title,
+        "status": "draft",
+        "questions": [q.model_dump() for q in result.quiz.questions],
+        "validation_report": result.validation_report.model_dump(),
+        "model_id": result.model or "qwen2.5:3b",
+        "created_at": SERVER_TIMESTAMP,
+        "updated_at": SERVER_TIMESTAMP,
+        "published_at": None,
+    }
+
+    try:
+        quiz_ref.set(draft_record)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save quiz draft.",
+        ) from exc
+
+    saved_doc = quiz_ref.get()
+    if not saved_doc.exists:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve saved quiz draft.",
+        )
+
+    return quiz_draft_response(quiz_ref.id, saved_doc.to_dict() or {})

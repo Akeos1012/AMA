@@ -7,12 +7,11 @@ import {
 import { authenticatedFetch } from "../../services/api.js";
 import PortalLayout from "../../components/PortalLayout.jsx";
 import AdminNavigation from "../../components/navigation/AdminNavigation.jsx";
-import { mockClasses } from "./classesMockData.js";
 import "./Dashboard.css";
 
 const USERS_ENDPOINT = "/api/admin/users";
 const SUBJECTS_ENDPOINT = "/api/admin/subjects";
-const CLASSES_STORAGE_KEY = "ama-lms-admin-classes";
+const CLASSES_ENDPOINT = "/api/admin/classes";
 
 async function parseResponse(response) {
   let data;
@@ -29,25 +28,6 @@ async function parseResponse(response) {
     );
   }
   return data;
-}
-
-function getStoredClasses() {
-  const savedClasses = window.localStorage.getItem(CLASSES_STORAGE_KEY);
-  if (savedClasses === null) return mockClasses;
-
-  const parsedClasses = JSON.parse(savedClasses);
-  if (
-    !Array.isArray(parsedClasses) ||
-    parsedClasses.some(
-      (schoolClass) =>
-        !schoolClass ||
-        typeof schoolClass.id !== "string" ||
-        typeof schoolClass.status !== "string",
-    )
-  ) {
-    throw new Error("Saved class data has an invalid format.");
-  }
-  return parsedClasses;
 }
 
 function getCreatedAtValue(user) {
@@ -76,6 +56,7 @@ export default function AdminDashboard() {
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState("");
   const [classes, setClasses] = useState(null);
+  const [classesLoading, setClassesLoading] = useState(true);
   const [classesError, setClassesError] = useState("");
   const [subjects, setSubjects] = useState(null);
   const [subjectsLoading, setSubjectsLoading] = useState(true);
@@ -119,14 +100,22 @@ export default function AdminDashboard() {
     }
   }, []);
 
-  const loadClasses = useCallback(() => {
+  const loadClasses = useCallback(async (user) => {
     setClassesError("");
     try {
-      setClasses(getStoredClasses());
+      const data = await parseResponse(
+        await authenticatedFetch(user, CLASSES_ENDPOINT),
+      );
+      if (!Array.isArray(data)) {
+        throw new Error("The classes endpoint returned unexpected data.");
+      }
+      setClasses(data);
     } catch (error) {
       console.error("Could not load dashboard classes:", error);
       setClasses(null);
       setClassesError("Unable to load class information.");
+    } finally {
+      setClassesLoading(false);
     }
   }, []);
 
@@ -153,7 +142,7 @@ export default function AdminDashboard() {
           await Promise.all([
             loadUsers(user),
             loadSubjects(user),
-            Promise.resolve().then(loadClasses),
+            loadClasses(user),
           ]);
         } catch (error) {
           console.error("Admin authentication check failed:", error);
@@ -171,14 +160,6 @@ export default function AdminDashboard() {
       unsubscribe();
     };
   }, [loadClasses, loadSubjects, loadUsers]);
-
-  useEffect(() => {
-    function refreshStoredClasses(event) {
-      if (!event.key || event.key === CLASSES_STORAGE_KEY) loadClasses();
-    }
-    window.addEventListener("storage", refreshStoredClasses);
-    return () => window.removeEventListener("storage", refreshStoredClasses);
-  }, [loadClasses]);
 
   const counts = useMemo(() => {
     if (!users) return null;
@@ -221,8 +202,7 @@ export default function AdminDashboard() {
       .slice(0, 5);
   }, [users]);
 
-  const isDashboardLoading =
-    usersLoading || subjectsLoading || !classes && !classesError;
+  const isDashboardLoading = usersLoading || subjectsLoading || classesLoading;
   const cards = [
     {
       label: "Total Users",
@@ -289,7 +269,7 @@ export default function AdminDashboard() {
                 {card.value === undefined
                   ? usersLoading && card.route === "/admin/users" ||
                     subjectsLoading && card.label === "Subjects" ||
-                    !classes && !classesError && card.label === "Classes"
+                    classesLoading && card.label === "Classes"
                     ? "…"
                     : "—"
                   : card.value}
@@ -400,7 +380,7 @@ export default function AdminDashboard() {
                   <button
                     type="button"
                     className="admin-dashboard-retry"
-                    onClick={loadClasses}
+                    onClick={() => currentUser && loadClasses(currentUser)}
                   >
                     Retry
                   </button>

@@ -1,12 +1,27 @@
 import unittest
 from datetime import datetime, timezone
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from pypdf import PdfWriter
+from pypdf.generic import (
+    DecodedStreamObject,
+    DictionaryObject,
+    NameObject,
+    NumberObject,
+)
 
 from app.api import lessons
+from app.extraction.lesson_import import (
+    PDF_MAX_BYTES,
+    PDF_MAX_PAGES,
+    TXT_MAX_BYTES,
+    text_to_paragraphs,
+)
+from app.extraction.lesson_text import extract_lesson_text
 
 
 NOW = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
@@ -24,6 +39,63 @@ CREATE_BODY = {
     "class_id": "class-1",
     "content": CONTENT,
 }
+
+
+def make_pdf(page_texts, password=None):
+    writer = PdfWriter()
+    for text in page_texts:
+        page = writer.add_blank_page(width=612, height=792)
+        if text is not None:
+            font = DictionaryObject(
+                {
+                    NameObject("/Type"): NameObject("/Font"),
+                    NameObject("/Subtype"): NameObject("/Type1"),
+                    NameObject("/BaseFont"): NameObject("/Helvetica"),
+                }
+            )
+            font_reference = writer._add_object(font)
+            page[NameObject("/Resources")] = DictionaryObject(
+                {
+                    NameObject("/Font"): DictionaryObject(
+                        {NameObject("/F1"): font_reference}
+                    )
+                }
+            )
+            stream = DecodedStreamObject()
+            escaped_text = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            stream.set_data(
+                f"BT /F1 12 Tf 72 720 Td ({escaped_text}) Tj ET".encode("latin-1")
+            )
+            page[NameObject("/Contents")] = writer._add_object(stream)
+        else:
+            image = DecodedStreamObject()
+            image.update(
+                {
+                    NameObject("/Type"): NameObject("/XObject"),
+                    NameObject("/Subtype"): NameObject("/Image"),
+                    NameObject("/Width"): NumberObject(1),
+                    NameObject("/Height"): NumberObject(1),
+                    NameObject("/ColorSpace"): NameObject("/DeviceRGB"),
+                    NameObject("/BitsPerComponent"): NumberObject(8),
+                }
+            )
+            image.set_data(b"\x00\x00\x00")
+            image_reference = writer._add_object(image)
+            page[NameObject("/Resources")] = DictionaryObject(
+                {
+                    NameObject("/XObject"): DictionaryObject(
+                        {NameObject("/Im1"): image_reference}
+                    )
+                }
+            )
+            stream = DecodedStreamObject()
+            stream.set_data(b"q 100 0 0 100 0 0 cm /Im1 Do Q")
+            page[NameObject("/Contents")] = writer._add_object(stream)
+    if password is not None:
+        writer.encrypt(password)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
 
 
 class FakeSnapshot:
@@ -300,6 +372,327 @@ class LessonApiTests(unittest.TestCase):
         self.assertEqual(stored["teacher_id"], "teacher-1")
         self.assertEqual(stored["status"], "draft")
 
+    def test_create_and_retrieve_preserves_ordered_canonical_blocks(self):
+        body = {
+            **CREATE_BODY,
+            "content": {
+                "schema_version": 1,
+                "blocks": [
+                    {"type": "heading", "text": "First section", "level": 1},
+                    {"type": "paragraph", "text": "First explanation."},
+                    {"type": "bullet_list", "items": ["First point", "Second point"]},
+                ],
+            },
+        }
+        created = self.client.post(
+            "/api/lessons",
+            json=body,
+            headers=self.headers(),
+        )
+        self.assertEqual(created.status_code, 201)
+        lesson_id = created.json()["id"]
+
+        retrieved = self.client.get(
+            f"/api/lessons/{lesson_id}",
+            headers=self.headers(),
+        )
+
+        self.assertEqual(retrieved.status_code, 200)
+        self.assertEqual(retrieved.json()["content"], body["content"])
+        self.assertEqual(
+            self.database.collection("lessons").documents[lesson_id]["content"],
+            body["content"],
+        )
+
+    def test_update_persists_content_changes_without_changing_publication_status(self):
+        self.add_lesson(status="published")
+        original_published_at = self.database.collection("lessons").documents[
+            "lesson-1"
+        ]["published_at"]
+        updated_content = {
+            "schema_version": 1,
+            "blocks": [
+                {"type": "paragraph", "text": "Revised paragraph."},
+                {"type": "heading", "text": "Updated heading", "level": 2},
+                {"type": "bullet_list", "items": ["Updated point"]},
+            ],
+        }
+
+        updated = self.client.patch(
+            "/api/lessons/lesson-1",
+            json={"class_id": "class-1", "content": updated_content},
+            headers=self.headers(),
+        )
+        retrieved = self.client.get(
+            "/api/lessons/lesson-1",
+            headers=self.headers(),
+        )
+
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(retrieved.status_code, 200)
+        self.assertEqual(retrieved.json()["content"], updated_content)
+        self.assertEqual(retrieved.json()["status"], "published")
+        expected_published_at = original_published_at.isoformat().replace(
+            "+00:00", "Z"
+        )
+        self.assertEqual(retrieved.json()["published_at"], expected_published_at)
+
+    def test_create_and_update_reject_malformed_content_without_persisting(self):
+        invalid_create = {
+            **CREATE_BODY,
+            "content": {
+                "schema_version": 1,
+                "blocks": [{"type": "image", "url": "https://example.test/image.png"}],
+            },
+        }
+        create_response = self.client.post(
+            "/api/lessons",
+            json=invalid_create,
+            headers=self.headers(),
+        )
+        self.assertEqual(create_response.status_code, 422)
+        self.assertTrue(create_response.json()["detail"])
+        self.assertEqual(self.database.collection("lessons").documents, {})
+
+        self.add_lesson()
+        original = dict(self.database.collection("lessons").documents["lesson-1"])
+        invalid_update = self.client.patch(
+            "/api/lessons/lesson-1",
+            json={
+                "class_id": "class-1",
+                "content": {
+                    "schema_version": 1,
+                    "blocks": [{"type": "bullet_list", "items": []}],
+                },
+            },
+            headers=self.headers(),
+        )
+
+        self.assertEqual(invalid_update.status_code, 422)
+        self.assertTrue(invalid_update.json()["detail"])
+        self.assertEqual(
+            self.database.collection("lessons").documents["lesson-1"],
+            original,
+        )
+
+    def test_txt_import_validates_teacher_access_and_returns_utf8_preview(self):
+        uploaded_text = (
+            "\ufeffFirst paragraph, first line.\nSecond line.\n\n"
+            "Second paragraph remains separate."
+        ).encode("utf-8")
+        response = self.client.post(
+            "/api/lessons/import/txt",
+            data={"class_id": "class-1", "subject_id": "subject-1"},
+            files={"file": ("lesson.txt", uploaded_text, "application/pdf")},
+            headers=self.headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["source_type"], "txt")
+        self.assertEqual(
+            response.json()["text"],
+            "First paragraph, first line.\nSecond line.\n\n"
+            "Second paragraph remains separate.",
+        )
+        self.assertEqual(response.json()["paragraph_count"], 2)
+
+    def test_txt_import_rejects_empty_whitespace_invalid_extension_and_encoding(self):
+        cases = (
+            ("empty.txt", b"", 422),
+            ("blank.txt", b" \r\n\t ", 422),
+            ("wrong.pdf", b"Some text.", 415),
+            ("bad-encoding.txt", b"\xff\xfe\x00", 422),
+            ("latin1.txt", b"caf\xe9", 422),
+            ("binary.txt", b"valid\x00text", 422),
+            ("pdf-as-text.txt", b"%PDF-1.7\nnot plain text", 422),
+        )
+        for filename, data, expected_status in cases:
+            with self.subTest(filename=filename):
+                response = self.client.post(
+                    "/api/lessons/import/txt",
+                    data={"class_id": "class-1", "subject_id": "subject-1"},
+                    files={"file": (filename, data, "text/plain")},
+                    headers=self.headers(),
+                )
+                self.assertEqual(response.status_code, expected_status)
+                self.assertNotIn("Traceback", response.text)
+
+    def test_txt_import_enforces_file_and_extracted_text_limits(self):
+        too_large = self.client.post(
+            "/api/lessons/import/txt",
+            data={"class_id": "class-1", "subject_id": "subject-1"},
+            files={"file": ("large.txt", b"a" * (TXT_MAX_BYTES + 1), "text/plain")},
+            headers=self.headers(),
+        )
+        self.assertEqual(too_large.status_code, 413)
+
+        too_much_text = self.client.post(
+            "/api/lessons/import/txt",
+            data={"class_id": "class-1", "subject_id": "subject-1"},
+            files={
+                "file": (
+                    "large-content.txt",
+                    b"a" * (256 * 1024 + 1),
+                    "text/plain",
+                )
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(too_much_text.status_code, 413)
+
+    def test_pdf_import_preserves_page_order_and_returns_editable_text(self):
+        pdf = make_pdf(
+            [
+                "First page selectable lesson text.",
+                "Second page selectable lesson text.",
+            ]
+        )
+        response = self.client.post(
+            "/api/lessons/import/pdf",
+            data={"class_id": "class-1", "subject_id": "subject-1"},
+            files={"file": ("lesson.pdf", pdf, "text/plain")},
+            headers=self.headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertEqual(result["source_type"], "pdf")
+        self.assertEqual(result["page_count"], 2)
+        self.assertLess(
+            result["text"].index("First page"),
+            result["text"].index("Second page"),
+        )
+        self.assertEqual(result["paragraph_count"], 2)
+
+    def test_pdf_import_rejects_wrong_content_empty_corrupt_encrypted_and_no_text(self):
+        cases = (
+            ("empty.pdf", b"", "application/pdf", "empty"),
+            ("not-a-pdf.pdf", b"plain text, not a pdf", "application/pdf", "valid PDF"),
+            ("corrupt.pdf", b"%PDF-1.7\nnot a valid document", "application/pdf", "corrupt"),
+            (
+                "encrypted.pdf",
+                make_pdf(["Secret lesson text."], password="test-password"),
+                "application/pdf",
+                "Password-protected",
+            ),
+            (
+                "scanned.pdf",
+                make_pdf([None]),
+                "application/pdf",
+                "OCR is not supported",
+            ),
+            ("wrong.txt", make_pdf(["PDF content."]), "application/pdf", ".pdf"),
+        )
+        for filename, data, mime_type, expected_message in cases:
+            with self.subTest(filename=filename):
+                response = self.client.post(
+                    "/api/lessons/import/pdf",
+                    data={"class_id": "class-1", "subject_id": "subject-1"},
+                    files={"file": (filename, data, mime_type)},
+                    headers=self.headers(),
+                )
+                self.assertIn(response.status_code, (415, 422))
+                self.assertIn(expected_message.lower(), response.json()["detail"].lower())
+                self.assertNotIn("Traceback", response.text)
+
+    def test_pdf_import_enforces_file_and_page_limits(self):
+        too_large = self.client.post(
+            "/api/lessons/import/pdf",
+            data={"class_id": "class-1", "subject_id": "subject-1"},
+            files={"file": ("large.pdf", b"x" * (PDF_MAX_BYTES + 1), "application/pdf")},
+            headers=self.headers(),
+        )
+        self.assertEqual(too_large.status_code, 413)
+
+        too_much_extracted_text = self.client.post(
+            "/api/lessons/import/pdf",
+            data={"class_id": "class-1", "subject_id": "subject-1"},
+            files={
+                "file": (
+                    "large-text.pdf",
+                    make_pdf(["a" * (256 * 1024 + 1)]),
+                    "application/pdf",
+                )
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(too_much_extracted_text.status_code, 413)
+
+        too_many_pages = self.client.post(
+            "/api/lessons/import/pdf",
+            data={"class_id": "class-1", "subject_id": "subject-1"},
+            files={
+                "file": (
+                    "many-pages.pdf",
+                    make_pdf([""] * (PDF_MAX_PAGES + 1)),
+                    "application/pdf",
+                )
+            },
+            headers=self.headers(),
+        )
+        self.assertEqual(too_many_pages.status_code, 413)
+
+    def test_import_requires_teacher_role_and_authorized_class_subject(self):
+        form_data = {"class_id": "class-1", "subject_id": "subject-1"}
+        file_data = {"file": ("lesson.txt", b"Usable lesson text.", "text/plain")}
+        non_teacher = self.client.post(
+            "/api/lessons/import/txt",
+            data=form_data,
+            files=file_data,
+            headers=self.headers("student-1"),
+        )
+        unauthorized_pair = self.client.post(
+            "/api/lessons/import/txt",
+            data={"class_id": "class-2", "subject_id": "subject-1"},
+            files=file_data,
+            headers=self.headers(),
+        )
+
+        self.assertEqual(non_teacher.status_code, 403)
+        self.assertEqual(unauthorized_pair.status_code, 403)
+
+    def test_imported_text_can_be_saved_reloaded_and_extracted_with_stable_indices(self):
+        text = (
+            "First imported paragraph contains useful biology material.\n"
+            "Its second line stays in order.\n\n"
+            "Second imported paragraph explains the related process."
+        )
+        imported = self.client.post(
+            "/api/lessons/import/txt",
+            data={"class_id": "class-1", "subject_id": "subject-1"},
+            files={"file": ("lesson.txt", text.encode("utf-8"), "text/plain")},
+            headers=self.headers(),
+        )
+        self.assertEqual(imported.status_code, 200)
+        blocks = [
+            {"type": "paragraph", "text": paragraph}
+            for paragraph in text_to_paragraphs(imported.json()["text"])
+        ]
+        create_body = {
+            **CREATE_BODY,
+            "content": {"schema_version": 1, "blocks": blocks},
+        }
+        created = self.client.post(
+            "/api/lessons",
+            json=create_body,
+            headers=self.headers(),
+        )
+        self.assertEqual(created.status_code, 201)
+        reloaded = self.client.get(
+            f"/api/lessons/{created.json()['id']}",
+            headers=self.headers(),
+        )
+
+        self.assertEqual(reloaded.status_code, 200)
+        self.assertEqual(reloaded.json()["content"]["blocks"], blocks)
+        extracted = extract_lesson_text(reloaded.json(), min_word_count=1)
+        self.assertEqual([passage.block_index for passage in extracted.passages], [0, 1])
+        self.assertIn("First imported paragraph", extracted.full_text)
+        self.assertLess(
+            extracted.full_text.index("First imported paragraph"),
+            extracted.full_text.index("Second imported paragraph"),
+        )
+
     def test_teacher_can_list_owned_lessons_with_active_assignment(self):
         self.add_lesson("owned-draft")
         self.add_lesson("other-teacher", teacher_id="teacher-2")
@@ -317,6 +710,8 @@ class LessonApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], "lesson-1")
+        self.assertEqual(response.json()["content"]["schema_version"], 1)
+        self.assertEqual(response.json()["content"]["blocks"], CONTENT["blocks"])
 
     def test_teacher_can_update_lesson(self):
         self.add_lesson()
@@ -333,6 +728,18 @@ class LessonApiTests(unittest.TestCase):
 
     def test_teacher_can_publish_and_unpublish_lesson(self):
         self.add_lesson()
+        original_content = self.database.collection("lessons").documents[
+            "lesson-1"
+        ]["content"]
+        original_extraction = extract_lesson_text(
+            {
+                "id": "lesson-1",
+                "title": "Fractions",
+                "topic": "Adding fractions",
+                "content": original_content,
+            },
+            min_word_count=1,
+        )
 
         published = self.client.post(
             "/api/lessons/lesson-1/publish",
@@ -341,6 +748,17 @@ class LessonApiTests(unittest.TestCase):
         self.assertEqual(published.status_code, 200)
         self.assertEqual(published.json()["status"], "published")
         self.assertEqual(published.json()["published_at"], NOW_JSON)
+        self.assertEqual(
+            published.json()["content"],
+            {"schema_version": 1, **original_content},
+        )
+        self.assertLess(
+            len(" ".join(
+                block.get("text", " ".join(block.get("items", [])))
+                for block in original_content["blocks"]
+            ).split()),
+            15,
+        )
 
         unpublished = self.client.post(
             "/api/lessons/lesson-1/unpublish",
@@ -349,6 +767,72 @@ class LessonApiTests(unittest.TestCase):
         self.assertEqual(unpublished.status_code, 200)
         self.assertEqual(unpublished.json()["status"], "draft")
         self.assertIsNone(unpublished.json()["published_at"])
+        self.assertEqual(
+            unpublished.json()["content"],
+            {"schema_version": 1, **original_content},
+        )
+        unpublished_extraction = extract_lesson_text(
+            unpublished.json(),
+            min_word_count=1,
+        )
+        self.assertEqual(
+            unpublished_extraction.full_text,
+            original_extraction.full_text,
+        )
+        self.assertEqual(
+            [passage.block_index for passage in unpublished_extraction.passages],
+            [passage.block_index for passage in original_extraction.passages],
+        )
+
+    def test_publishing_rejects_missing_metadata_or_unusable_content(self):
+        cases = (
+            (
+                "missing title",
+                {"title": "   "},
+                "Add a lesson title",
+            ),
+            (
+                "missing topic",
+                {"topic": ""},
+                "Add a lesson topic",
+            ),
+            (
+                "invalid content",
+                {
+                    "content": {
+                        "schema_version": 1,
+                        "blocks": [{"type": "paragraph", "text": "   "}],
+                    }
+                },
+                "Lesson content is invalid",
+            ),
+            (
+                "unusable content",
+                {
+                    "content": {
+                        "schema_version": 1,
+                        "blocks": [{"type": "paragraph", "text": "!?..."}],
+                    }
+                },
+                "usable lesson text",
+            ),
+        )
+        for label, changes, expected_detail in cases:
+            with self.subTest(label=label):
+                self.add_lesson()
+                stored = self.database.collection("lessons").documents["lesson-1"]
+                original_content = stored["content"]
+                stored.update(changes)
+
+                response = self.client.post(
+                    "/api/lessons/lesson-1/publish",
+                    headers=self.headers(),
+                )
+
+                self.assertEqual(response.status_code, 422)
+                self.assertIn(expected_detail, response.json()["detail"])
+                self.assertEqual(stored["status"], "draft")
+                self.assertEqual(stored["content"], original_content if "content" not in changes else changes["content"])
 
     def test_teacher_can_delete_owned_lesson(self):
         self.add_lesson()
@@ -592,6 +1076,32 @@ class LessonApiTests(unittest.TestCase):
                 headers=self.headers("student-1"),
             )
             self.assertEqual(response.status_code, 404)
+
+    def test_student_loses_lesson_access_after_teacher_unpublishes(self):
+        self.add_membership()
+        self.add_lesson(status="published")
+
+        before_unpublish = self.client.get(
+            "/api/lessons/lesson-1",
+            headers=self.headers("student-1"),
+        )
+        unpublished = self.client.post(
+            "/api/lessons/lesson-1/unpublish",
+            headers=self.headers(),
+        )
+        student_list = self.client.get(
+            "/api/lessons",
+            headers=self.headers("student-1"),
+        )
+        after_unpublish = self.client.get(
+            "/api/lessons/lesson-1",
+            headers=self.headers("student-1"),
+        )
+
+        self.assertEqual(before_unpublish.status_code, 200)
+        self.assertEqual(unpublished.status_code, 200)
+        self.assertEqual([item["id"] for item in student_list.json()], [])
+        self.assertEqual(after_unpublish.status_code, 404)
 
     def test_student_requires_active_membership_and_matching_active_assignment(self):
         self.add_lesson(status="published")

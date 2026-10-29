@@ -12,6 +12,22 @@ NonEmptyText = Annotated[
 ClassStatus = Literal["active", "inactive"]
 AssignmentStatus = Literal["active", "inactive"]
 MembershipStatus = Literal["active", "inactive"]
+ScheduleDay = Literal["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+ScheduleTime = Annotated[
+    str,
+    StringConstraints(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$"),
+]
+
+
+class ClassScheduleEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    id: NonEmptyText
+    day: ScheduleDay
+    start_time: ScheduleTime
+    end_time: ScheduleTime
+    subject_id: NonEmptyText
+    teacher_uid: NonEmptyText
 
 
 class ClassCreateRequest(BaseModel):
@@ -22,6 +38,7 @@ class ClassCreateRequest(BaseModel):
     section: NonEmptyText
     status: ClassStatus = "active"
     lead_teacher_uid: NonEmptyText | None = None
+    schedule: list[ClassScheduleEntry] = Field(default_factory=list)
 
 
 class ClassUpdateRequest(BaseModel):
@@ -32,13 +49,14 @@ class ClassUpdateRequest(BaseModel):
     section: NonEmptyText | None = None
     status: ClassStatus | None = None
     lead_teacher_uid: NonEmptyText | None = None
+    schedule: list[ClassScheduleEntry] | None = None
 
     def model_post_init(self, __context: object) -> None:
         if not self.model_fields_set:
             raise ValueError("At least one class field must be provided.")
 
         for field_name in self.model_fields_set:
-            if field_name != "lead_teacher_uid" and getattr(self, field_name) is None:
+            if field_name not in {"lead_teacher_uid"} and getattr(self, field_name) is None:
                 raise ValueError(f"{field_name} cannot be null.")
 
 
@@ -53,6 +71,7 @@ class ClassResponse(BaseModel):
     section: NonEmptyText
     status: ClassStatus
     lead_teacher_uid: NonEmptyText | None = None
+    schedule: list[ClassScheduleEntry] = Field(default_factory=list)
     created_at: AwareDatetime
     updated_at: AwareDatetime
 
