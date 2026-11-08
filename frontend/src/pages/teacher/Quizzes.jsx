@@ -7,6 +7,7 @@ import {
 import { authenticatedFetch } from "../../services/api.js";
 import PortalLayout from "../../components/PortalLayout.jsx";
 import TeacherNavigation from "../../components/navigation/TeacherNavigation.jsx";
+import DraftReview from "./quizzes/QuizDraftReview.jsx";
 import "./Quizzes.css";
 
 const QUESTION_TYPES = [
@@ -83,281 +84,6 @@ function responseMessage(status) {
 
 function readValidationPayload(response) {
   return response.json().catch(() => null);
-}
-
-function updateQuestion(setDraft, questionIndex, field, value) {
-  setDraft((current) => ({
-    ...current,
-    questions: current.questions.map((question, index) =>
-      index === questionIndex ? { ...question, [field]: value } : question,
-    ),
-  }));
-}
-
-function ValidationIssues({ issues }) {
-  if (!issues?.length) return null;
-  return (
-    <ul className="quiz-issues">
-      {issues.map((issue, index) => (
-        <li className={`quiz-issue quiz-issue-${issue.severity}`} key={`${issue.stage}-${index}`}>
-          <strong>{issue.severity === "warning" ? "Warning" : "Issue"}:</strong>{" "}
-          {issue.message}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Evidence({ evidence, lesson }) {
-  if (!evidence) return null;
-  const sourceReference =
-    Number.isInteger(evidence.block_index) && evidence.block_index >= 0
-      ? `content block ${evidence.block_index + 1}`
-      : "lesson content";
-
-  return (
-    <div className="quiz-evidence">
-      <h5>Lesson evidence</h5>
-      <blockquote>{evidence.quote}</blockquote>
-      <p>
-        Source: <strong>{lesson?.title || "Selected lesson"}</strong>, {sourceReference}.
-      </p>
-      {evidence.context && <p>{evidence.context}</p>}
-    </div>
-  );
-}
-
-function QuestionReview({ question, index, lesson, setDraft, validation }) {
-  const number = index + 1;
-  const edit = (field, value) => updateQuestion(setDraft, index, field, value);
-
-  return (
-    <article className="quiz-question-card">
-      <header className="quiz-question-heading">
-        <div>
-          <span className="quiz-type-badge">{question.type.replaceAll("_", " ")}</span>
-          <h4>Question {number}</h4>
-        </div>
-      </header>
-      {validation && (
-        <p className="quiz-question-validation">
-          Question validation: <strong>{validation.status}</strong>
-          {" · "}Schema: <strong>{validation.schema_valid ? "passed" : "not passed"}</strong>
-          {" · "}Evidence: <strong>{validation.evidence_supported}</strong>
-          {" · "}Answer check: <strong>{validation.answer_correct}</strong>
-        </p>
-      )}
-
-      <label className="quiz-edit-field">
-        Question text
-        <textarea
-          aria-label={`Question ${number} text`}
-          rows="3"
-          value={question.prompt}
-          onChange={(event) => edit("prompt", event.target.value)}
-        />
-      </label>
-
-      {question.type === "multiple_choice" && (
-        <div className="quiz-question-fields">
-          <fieldset className="quiz-options">
-            <legend>Answer options</legend>
-            {question.options.map((option, optionIndex) => (
-              <label className="quiz-edit-field" key={optionIndex}>
-                Option {optionIndex + 1}
-                <input
-                  aria-label={`Question ${number} option ${optionIndex + 1}`}
-                  value={option}
-                  onChange={(event) =>
-                    edit(
-                      "options",
-                      question.options.map((current, currentIndex) =>
-                        currentIndex === optionIndex ? event.target.value : current,
-                      ),
-                    )
-                  }
-                />
-              </label>
-            ))}
-          </fieldset>
-          <label className="quiz-edit-field">
-            Correct answer
-            <input
-              aria-label={`Question ${number} correct answer`}
-              value={question.correct_answer}
-              onChange={(event) => edit("correct_answer", event.target.value)}
-            />
-          </label>
-        </div>
-      )}
-
-      {question.type === "true_false" && (
-        <label className="quiz-edit-field">
-          Correct answer
-          <select
-            aria-label={`Question ${number} correct answer`}
-            value={String(question.correct_answer)}
-            onChange={(event) => edit("correct_answer", event.target.value === "true")}
-          >
-            <option value="true">True</option>
-            <option value="false">False</option>
-          </select>
-        </label>
-      )}
-
-      {question.type === "identification" && (
-        <>
-          <label className="quiz-edit-field">
-            Correct answer
-            <input
-              aria-label={`Question ${number} correct answer`}
-              value={question.correct_answer}
-              onChange={(event) => edit("correct_answer", event.target.value)}
-            />
-          </label>
-          <label className="quiz-edit-field">
-            Accepted alternatives (comma-separated)
-            <input
-              aria-label={`Question ${number} accepted alternatives`}
-              value={(question.accepted_alternatives ?? []).join(", ")}
-              onChange={(event) =>
-                edit(
-                  "accepted_alternatives",
-                  event.target.value
-                    .split(",")
-                    .map((alternative) => alternative.trim())
-                    .filter(Boolean),
-                )
-              }
-            />
-          </label>
-        </>
-      )}
-
-      {question.type === "essay" && (
-        <>
-          <fieldset className="quiz-rubric">
-            <legend>Rubric</legend>
-            {(question.rubric ?? []).map((item, rubricIndex) => (
-              <label className="quiz-edit-field" key={rubricIndex}>
-                Rubric item {rubricIndex + 1}
-                <textarea
-                  aria-label={`Question ${number} rubric item ${rubricIndex + 1}`}
-                  rows="2"
-                  value={item}
-                  onChange={(event) =>
-                    edit(
-                      "rubric",
-                      question.rubric.map((current, currentIndex) =>
-                        currentIndex === rubricIndex ? event.target.value : current,
-                      ),
-                    )
-                  }
-                />
-              </label>
-            ))}
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => edit("rubric", [...(question.rubric ?? []), ""])}
-            >
-              Add rubric item
-            </button>
-          </fieldset>
-          <label className="quiz-edit-field">
-            Sample solution
-            <textarea
-              aria-label={`Question ${number} sample solution`}
-              rows="3"
-              value={question.sample_solution ?? ""}
-              onChange={(event) => edit("sample_solution", event.target.value)}
-            />
-          </label>
-        </>
-      )}
-
-      {question.explanation !== undefined && (
-        <label className="quiz-edit-field">
-          Teacher explanation
-          <textarea
-            aria-label={`Question ${number} explanation`}
-            rows="2"
-            value={question.explanation}
-            onChange={(event) => edit("explanation", event.target.value)}
-          />
-        </label>
-      )}
-
-      <Evidence evidence={question.evidence} lesson={lesson} />
-    </article>
-  );
-}
-
-function DraftReview({ draft, lesson, setDraft }) {
-  const report = draft.validation_report;
-  const generalIssues = report?.general_issues ?? [];
-  const questionIssues = (report?.question_reports ?? []).flatMap((questionReport) =>
-    (questionReport.issues ?? []).map((issue) => ({
-      ...issue,
-      question_index: questionReport.question_index,
-    })),
-  );
-
-  return (
-    <section className="quiz-draft-review" aria-labelledby="quiz-draft-title">
-      <header className="quiz-draft-header">
-        <div>
-          <p className="quiz-eyebrow">Saved quiz draft</p>
-          <h3 id="quiz-draft-title">{draft.title}</h3>
-          <p>
-            Status: <strong>Draft — teacher review required</strong>
-          </p>
-        </div>
-        <span className="quiz-draft-status">Draft</span>
-      </header>
-
-      <div className="quiz-review-notice" role="note">
-        Review every question before using it with students. This draft is not approved or
-        published. Changes below are local to this page and are not saved; the backend
-        currently has no authorized draft-edit endpoint.
-      </div>
-
-      <section className="quiz-validation" aria-label="Validation results">
-        <h4>Validation results</h4>
-        <p>
-          Overall: <strong>{report?.status || "not reported"}</strong>
-          {" · "}Valid: <strong>{report?.is_valid ? "Yes" : "No"}</strong>
-          {" · "}Grounding: <strong>{report?.grounding_passed ? "Passed" : "Not passed"}</strong>
-          {" · "}Answer checks:{" "}
-          <strong>{report?.correctness_passed ? "Passed" : "Not passed"}</strong>
-        </p>
-        <ValidationIssues issues={generalIssues} />
-        {questionIssues.map((issue, index) => (
-          <p className={`quiz-issue quiz-issue-${issue.severity}`} key={`question-issue-${index}`}>
-            Question {issue.question_index + 1}: {issue.message}
-          </p>
-        ))}
-        {generalIssues.length === 0 && questionIssues.length === 0 && (
-          <p>No warnings or issues were reported.</p>
-        )}
-      </section>
-
-      <div className="quiz-question-list">
-        {draft.questions.map((question, index) => (
-          <QuestionReview
-            index={index}
-            key={`${index}-${question.type}`}
-            lesson={lesson}
-            question={question}
-            setDraft={setDraft}
-            validation={report?.question_reports?.find(
-              (questionReport) => questionReport.question_index === index,
-            )}
-          />
-        ))}
-      </div>
-    </section>
-  );
 }
 
 export default function TeacherQuizzes() {
@@ -476,7 +202,10 @@ export default function TeacherQuizzes() {
       }
 
       const generatedDraft = await response.json();
-      if (generatedDraft?.status !== "draft" || !Array.isArray(generatedDraft.questions)) {
+      if (
+        !["draft", "published"].includes(generatedDraft?.status) ||
+        !Array.isArray(generatedDraft.questions)
+      ) {
         setFormError("The server did not return a valid saved draft. Please try again.");
         return;
       }
@@ -627,7 +356,12 @@ export default function TeacherQuizzes() {
       </section>
 
       {draft && (
-        <DraftReview draft={draft} lesson={selectedLesson} setDraft={setDraft} />
+        <DraftReview
+          draft={draft}
+          lesson={selectedLesson}
+          setDraft={setDraft}
+          user={user}
+        />
       )}
     </PortalLayout>
   );

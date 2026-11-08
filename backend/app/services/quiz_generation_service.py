@@ -4,7 +4,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ai.client import BaseLLMClient, LLMResponse
 from app.ai.prompt_builder import build_quiz_prompt
-from app.extraction.lesson_text import ExtractedLessonContent
+from app.extraction.lesson_text import (
+    ExtractedLessonContent,
+    ExtractedPassage,
+    evidence_id_for_passage,
+)
 from app.models.generation import (
     EssayQuestion,
     GeneratedQuestion,
@@ -89,6 +93,47 @@ class QuizGenerationService:
                 details={"index": index, "type": q_type, "errors": exc.errors()},
             ) from exc
 
+    def _resolve_evidence(
+        self,
+        raw_q: dict[str, Any],
+        index: int,
+        evidence_map: dict[str, ExtractedPassage],
+    ) -> dict[str, Any]:
+        """Replace an AI-selected evidence ID with trusted lesson evidence."""
+        if not isinstance(raw_q, dict):
+            raise SchemaValidationError(
+                f"Question at index {index} must be an object.",
+                details={"index": index},
+            )
+
+        raw_evidence = raw_q.get("evidence")
+        if not isinstance(raw_evidence, dict):
+            raise SchemaValidationError(
+                f"Question at index {index} is missing an evidence object.",
+                details={"index": index},
+            )
+
+        evidence_id = raw_evidence.get("evidence_id")
+        if not isinstance(evidence_id, str) or not evidence_id or evidence_id != evidence_id.strip():
+            raise SchemaValidationError(
+                f"Question at index {index} is missing a valid evidence_id.",
+                details={"index": index},
+            )
+
+        passage = evidence_map.get(evidence_id)
+        if passage is None:
+            raise SchemaValidationError(
+                f"Question at index {index} references an unknown evidence_id.",
+                details={"index": index},
+            )
+
+        resolved_question = dict(raw_q)
+        resolved_question["evidence"] = {
+            "quote": passage.text,
+            "block_index": passage.block_index,
+        }
+        return resolved_question
+
     def generate_quiz(
         self,
         lesson: ExtractedLessonContent,
@@ -134,9 +179,18 @@ class QuizGenerationService:
                 details={"response_keys": list(data.keys())},
             )
 
-        # 3. Parse and validate each question schema
+        evidence_map = {
+            evidence_id_for_passage(lesson.lesson_id, passage.block_index): passage
+            for passage in lesson.passages
+        }
+
+        # 3. Resolve trusted lesson evidence, then parse and validate each question schema
         parsed_questions: list[GeneratedQuestion] = [
-            self._parse_question(q, idx) for idx, q in enumerate(raw_questions)
+            self._parse_question(
+                self._resolve_evidence(q, idx, evidence_map),
+                idx,
+            )
+            for idx, q in enumerate(raw_questions)
         ]
 
         if not parsed_questions:

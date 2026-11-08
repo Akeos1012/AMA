@@ -328,8 +328,8 @@ function UsersPage() {
       setUsersMessage({
         type: resetEmailFailed ? "error" : "success",
         text: resetEmailFailed
-          ? `${createdRole} account created, but the password reset email could not be sent.`
-          : `${createdRole} account created successfully.`,
+          ? `${createdRole} account created, but the password setup email could not be sent. Use Send Reset Email to retry.`
+          : `${createdRole} account created. Password setup instructions were sent to ${requestBody.email}.`,
       });
       await loadAdminUsers(user);
     } catch (error) {
@@ -496,6 +496,8 @@ function UsersPage() {
             "Too many reset attempts. Wait a while before trying again.",
           "auth/user-not-found":
             "The registered account could not be found in Firebase Authentication.",
+          "auth/invalid-email":
+            "The account email is invalid. Update the account email and try again.",
         };
         setUsersMessage({
           type: "error",

@@ -1,4 +1,5 @@
 import React from "react";
+import { auth, signOut } from "../services/firebase.js";
 import "./PortalLayout.css";
 import "./navigation/SidebarNavigation.css";
 
@@ -11,6 +12,15 @@ export default function PortalLayout({
   navigation,
   children,
 }) {
+  async function handleLogout() {
+    try {
+      await signOut(auth);
+      window.location.replace("/login");
+    } catch (error) {
+      console.error("Could not sign out:", error);
+    }
+  }
+
   return (
     <div
       className={`dashboard dashboard-${role}${pageClassName ? ` ${pageClassName}` : ""}`}
@@ -24,9 +34,9 @@ export default function PortalLayout({
         {navigation}
 
         <div className="sidebar-footer">
-          <a href="/" className="logout-link">
+          <button type="button" className="logout-link" onClick={handleLogout}>
             Logout
-          </a>
+          </button>
         </div>
       </aside>
 

@@ -219,6 +219,9 @@ class QuizDraft(BaseModel):
     subject_id: NonEmptyText
     teacher_id: NonEmptyText
     title: NonEmptyText
+    description: str | None = None
+    opening_at: AwareDatetime | None = None
+    closing_at: AwareDatetime | None = None
     status: QuizDraftStatus = "draft"
     questions: list[GeneratedQuestion] = Field(min_length=1)
     validation_report: QuizValidationReport
@@ -226,6 +229,34 @@ class QuizDraft(BaseModel):
     created_at: AwareDatetime
     updated_at: AwareDatetime
     published_at: AwareDatetime | None = None
+
+
+class QuizDraftUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    title: NonEmptyText | None = None
+    description: str | None = None
+    opening_at: AwareDatetime | None = None
+    closing_at: AwareDatetime | None = None
+    questions: list[GeneratedQuestion] | None = Field(default=None, min_length=1)
+
+    @field_validator("opening_at", "closing_at", mode="before")
+    @classmethod
+    def parse_datetime_string(cls, value: Any) -> Any:
+        """Allow ISO 8601 JSON strings while retaining aware-datetime validation."""
+        if value is None or isinstance(value, datetime):
+            return value
+        if not isinstance(value, str):
+            return value
+
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("Datetime must be a valid ISO 8601 value.") from exc
+
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("Datetime must include a timezone offset.")
+        return parsed
 
 
 class GenerationErrorDetail(BaseModel):
@@ -267,11 +298,9 @@ class OrchestrationResult(BaseModel):
 _EVIDENCE_SCHEMA: dict = {
     "type": "object",
     "properties": {
-        "quote": {"type": "string"},
-        "block_index": {"type": "integer"},
-        "context": {"type": "string"},
+        "evidence_id": {"type": "string"},
     },
-    "required": ["quote"],
+    "required": ["evidence_id"],
 }
 
 _QUESTION_TYPE_ENUM = ["multiple_choice", "true_false", "identification", "essay"]
@@ -334,13 +363,14 @@ def build_quiz_response_schema() -> dict:
 
     The schema describes the quiz response envelope (``title``, ``topic``,
     ``questions``) and uses ``anyOf`` to express the discriminated union of
-    question types.  Every question object **requires** an explicit ``type``
-    field restricted to the four valid enum values.
+    question types. Every question object **requires** an explicit ``type``
+    field restricted to the four valid enum values and an ``evidence_id``
+    selected from the lesson passages shown in the prompt.
 
     Ollama does not support JSON Schema ``$ref``/``$defs``, so all types are
-    inlined.  Optional Pydantic fields (``accepted_alternatives``,
-    ``sample_solution``, ``context``) are intentionally left non-required so
-    valid existing outputs are not rejected.
+    inlined. Optional question fields (``accepted_alternatives`` and
+    ``sample_solution``) are intentionally left non-required so valid outputs
+    are not rejected.
     """
     return {
         "type": "object",

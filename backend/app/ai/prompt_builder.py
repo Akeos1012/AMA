@@ -1,6 +1,6 @@
 from typing import Any
 
-from app.extraction.lesson_text import ExtractedLessonContent
+from app.extraction.lesson_text import ExtractedLessonContent, evidence_id_for_passage
 from app.models.generation import QuizGenerationRequest
 
 SYSTEM_PROMPT = """You are an expert assessment generator for an accredited academic Learning Management System.
@@ -9,9 +9,11 @@ Your job is to generate high-quality quiz questions strictly grounded in the pro
 CRITICAL GROUNDING RULES:
 1. Sole Factual Source: Base all questions, options, answer keys, rubrics, and explanations EXCLUSIVELY on the supplied lesson text.
 2. No Extrapolation: Do NOT introduce outside facts, dates, theories, or assumptions not explicitly taught in the lesson.
-3. Source Evidence Required: For EVERY question, you MUST provide an exact verbatim excerpt from the lesson text in the "evidence.quote" field, along with the source block index in "evidence.block_index".
-4. Exact Types & Counts: You must generate the EXACT count requested for each question type. Never substitute one type for another.
-5. Strict JSON Output: Output only a single valid JSON object following the specified schema without any markdown commentary outside the JSON.
+3. Source Evidence Required: For EVERY question, you MUST provide an evidence ID from the supplied lesson in the "evidence.evidence_id" field.
+4. Evidence Selection Rules: Select an evidence ID exactly as shown beside a source passage. Do NOT write an evidence quote, paraphrase a passage, invent a passage, or create an evidence ID. The backend will supply the original evidence quote after resolving your selected ID.
+5. Student-Friendly Wording: Questions and answer explanations may use simple wording appropriate for elementary students, but every factual claim must remain directly supported by the supplied lesson text.
+6. Exact Types & Counts: You must generate the EXACT count requested for each question type. Never substitute one type for another.
+7. Strict JSON Output: Output only a single valid JSON object following the specified schema without any markdown commentary outside the JSON.
 """
 
 
@@ -33,7 +35,8 @@ def build_quiz_prompt(
     # Format passages with block markers for exact evidence citing
     annotated_passages: list[str] = []
     for passage in lesson.passages:
-        prefix = f"[Block {passage.block_index}]"
+        evidence_id = evidence_id_for_passage(lesson.lesson_id, passage.block_index)
+        prefix = f"[Evidence ID: {evidence_id}] [Block {passage.block_index}]"
         annotated_passages.append(f"{prefix} {passage.text}")
     lesson_body = "\n\n".join(annotated_passages)
 
@@ -82,29 +85,30 @@ def build_quiz_prompt(
         '   - "options": [string, string, string, string] (EXACTLY 4 distinct options)',
         '   - "correct_answer": string (EXACT match to one of the options)',
         '   - "explanation": string (justification citing the lesson)',
-        '   - "evidence": {"quote": "verbatim sentence from lesson", "block_index": int}',
+        '   - "evidence": {"evidence_id": "ID copied from the supplied lesson"}',
         "",
         '2. True/False ("type": "true_false"):',
         '   - "prompt": string (unambiguous declarative statement)',
         '   - "correct_answer": boolean (true or false)',
         '   - "explanation": string (why statement is true or false)',
-        '   - "evidence": {"quote": "verbatim sentence from lesson", "block_index": int}',
+        '   - "evidence": {"evidence_id": "ID copied from the supplied lesson"}',
         "",
         '3. Identification ("type": "identification"):',
         '   - "prompt": string (direct question expecting a specific term or concept)',
         '   - "correct_answer": string (primary expected answer)',
         '   - "accepted_alternatives": [string] (list of acceptable alternative spellings/terms; omit or empty if none)',
         '   - "explanation": string (definition or context from lesson)',
-        '   - "evidence": {"quote": "verbatim sentence from lesson", "block_index": int}',
+        '   - "evidence": {"evidence_id": "ID copied from the supplied lesson"}',
         "",
         '4. Essay ("type": "essay"):',
         '   - "prompt": string (open-ended conceptual question)',
         '   - "rubric": [string] (list of key concepts required for full credit; minimum 1 item)',
         '   - "sample_solution": string or null (example comprehensive answer)',
         '   - "explanation": string (pedagogical background from lesson)',
-        '   - "evidence": {"quote": "verbatim sentence from lesson", "block_index": int}',
+        '   - "evidence": {"evidence_id": "ID copied from the supplied lesson"}',
         "",
-        "REMINDER: Do NOT invent facts. Every question, correct answer, and rubric element MUST be directly supported by the lesson text above.",
+        "EVIDENCE REMINDER: Return only an evidence_id copied exactly from the evidence IDs shown beside the supplied lesson passages. Do not return evidence.quote, do not paraphrase or summarize evidence, and do not invent or modify an evidence ID. The backend will resolve the ID to the original lesson passage.",
+        "REMINDER: Do NOT invent facts. Every question, correct answer, and rubric element MUST be directly supported by the lesson text above. Simple student-friendly wording is allowed for questions and explanations, but factual claims must remain supported by the lesson.",
     ])
 
     user_prompt = "\n".join(user_prompt_parts)

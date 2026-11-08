@@ -10,39 +10,18 @@ import TeacherNavigation from "../../components/navigation/TeacherNavigation.jsx
 import LessonBlockEditor, {
   MAX_IMPORTED_TEXT_LENGTH,
 } from "./lessons/LessonBlockEditor.jsx";
+import LessonPreview from "./lessons/LessonPreview.jsx";
+import {
+  importedTextToBlocks,
+  hasLessonText,
+  lessonContentText,
+  lessonWordCount,
+  contentBlocksFromLesson,
+  blockError,
+} from "./lessons/lessonContent.js";
 import "./Lessons.css";
 
 const EMPTY_CONTENT_BLOCKS = [{ type: "paragraph", text: "" }];
-
-function importedTextToBlocks(text) {
-  return text
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split(/\n[ \t]*\n+/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean)
-    .map((paragraph) => ({ type: "paragraph", text: paragraph }));
-}
-
-function hasLessonText(blocks) {
-  return blocks.some((block) =>
-    /[\p{L}\p{N}]/u.test(
-      block.type === "bullet_list" ? block.items.join(" ") : block.text,
-    ),
-  );
-}
-
-function lessonContentText(blocks) {
-  return blocks
-    .map((block) =>
-      block.type === "bullet_list" ? block.items.join(" ") : block.text,
-    )
-    .join(" ");
-}
-
-function lessonWordCount(blocks) {
-  return lessonContentText(blocks).trim().split(/\s+/).filter(Boolean).length;
-}
 
 function validateLessonForPublication(lesson, authorizedPairs) {
   if (!lesson.title?.trim()) return "Add a lesson title before publishing.";
@@ -93,31 +72,6 @@ function authorizedTeachingPairs(classes) {
       label: `${classLabel(schoolClass)} — ${subject.name || subject.code || subject.id}`,
     })),
   );
-}
-
-function contentBlocksFromLesson(lesson) {
-  return lesson.content.blocks.map((block) => {
-    if (block.type === "bullet_list") {
-      return { type: block.type, items: [...block.items] };
-    }
-    if (block.type === "heading") {
-      return { type: block.type, level: block.level, text: block.text };
-    }
-    return { type: "paragraph", text: block.text };
-  });
-}
-
-function blockError(block, index) {
-  if (block.type === "bullet_list") {
-    if (!block.items.length || block.items.some((item) => !item.trim())) {
-      return `Block ${index + 1} needs at least one non-empty bullet item.`;
-    }
-    return "";
-  }
-  if (!block.text.trim()) {
-    return `Block ${index + 1} must contain text.`;
-  }
-  return "";
 }
 
 async function responseError(response, fallback) {
@@ -825,59 +779,21 @@ export default function TeacherLessons() {
             </div>
           </header>
           {previewMode ? (
-            <article className="lesson-student-preview" aria-label="Student lesson preview">
-              <p className="lesson-preview-label">
-                Preview only · {formMode === "edit" ? "Current saved status: " : ""}
-                {formMode === "edit"
-                  ? lessons.find((lesson) => lesson.id === editingLessonId)?.status ?? "draft"
-                  : "Not saved"}
-              </p>
-              <h1>{title.trim() || "Untitled lesson"}</h1>
-              <p className="lesson-preview-topic">{topic.trim() || "No topic entered"}</p>
-              <dl className="lesson-preview-metadata">
-                <div>
-                  <dt>Class</dt>
-                  <dd>{selectedClass ? classLabel(selectedClass) : "Not selected"}</dd>
-                </div>
-                <div>
-                  <dt>Subject</dt>
-                  <dd>
-                    {selectedSubjects.find((subject) => subject.id === subjectId)?.name ||
-                      selectedSubjects.find((subject) => subject.id === subjectId)?.code ||
-                      "Not selected"}
-                  </dd>
-                </div>
-              </dl>
-              {lessonWordCount(blocks) < 15 && (
-                <p className="lesson-notice info" role="note">
-                  This lesson is below the 15-word quiz-generation minimum. It can still be published, but quiz generation will require more content.
-                </p>
-              )}
-              <div className="lesson-preview-content">
-                {!hasLessonText(blocks) ? (
-                  <p className="lesson-preview-empty">
-                    No lesson content has been entered yet.
-                  </p>
-                ) : (
-                  blocks.map((block, index) => {
-                    if (block.type === "heading") {
-                      const Heading = `h${Math.min(3, Math.max(1, block.level || 1))}`;
-                      return <Heading key={`preview-${index}`}>{block.text}</Heading>;
-                    }
-                    if (block.type === "bullet_list") {
-                      return (
-                        <ul key={`preview-${index}`}>
-                          {block.items.filter((item) => item.trim()).map((item, itemIndex) => (
-                            <li key={`preview-${index}-${itemIndex}`}>{item}</li>
-                          ))}
-                        </ul>
-                      );
-                    }
-                    return <p key={`preview-${index}`}>{block.text}</p>;
-                  })
-                )}
-              </div>
-            </article>
+            <LessonPreview
+              title={title}
+              topic={topic}
+              blocks={blocks}
+              isEditing={formMode === "edit"}
+              savedStatus={
+                lessons.find((lesson) => lesson.id === editingLessonId)?.status ?? "draft"
+              }
+              classLabel={selectedClass ? classLabel(selectedClass) : "Not selected"}
+              subjectLabel={
+                selectedSubjects.find((subject) => subject.id === subjectId)?.name ||
+                selectedSubjects.find((subject) => subject.id === subjectId)?.code ||
+                "Not selected"
+              }
+            />
           ) : (
           <form className="lesson-editor-form" onSubmit={saveLesson} noValidate>
             <div className="lesson-metadata-fields">

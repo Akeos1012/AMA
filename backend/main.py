@@ -9,6 +9,7 @@ from app.api.admin_subjects import router as admin_subjects_router
 from app.api.admin_classes import router as admin_classes_router
 from app.api.admin_classes import teacher_router as teacher_classes_router
 from app.api.lessons import router as lessons_router
+from app.api.quizzes import router as quizzes_router
 
 from pathlib import Path
 
@@ -40,3 +41,4 @@ app.include_router(admin_subjects_router, prefix="/api")
 app.include_router(admin_classes_router, prefix="/api")
 app.include_router(teacher_classes_router, prefix="/api")
 app.include_router(lessons_router, prefix="/api")
+app.include_router(quizzes_router, prefix="/api")

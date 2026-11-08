@@ -1,0 +1,109 @@
+.page-student-quizzes .student-quizzes {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  min-height: 250px;
+}
+
+.page-student-quizzes .student-quizzes-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 180px;
+  padding: 24px;
+  color: var(--color-muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+.page-student-quizzes .student-quizzes-state[role="alert"] {
+  color: var(--color-brand-dark);
+}
+
+.page-student-quizzes .student-quizzes-retry {
+  padding: 9px 16px;
+  border: 1px solid var(--color-brand);
+  border-radius: 6px;
+  background: var(--color-white);
+  color: var(--color-brand);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.page-student-quizzes .student-quizzes-retry:hover {
+  background: #fdf0f2;
+}
+
+.page-student-quizzes .student-quiz-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  padding: 22px;
+}
+
+.page-student-quizzes .student-quiz-card {
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #fffdfd;
+}
+
+.page-student-quizzes .student-quiz-card h4 {
+  margin-bottom: 10px;
+  color: var(--color-brand-dark);
+  font-size: 17px;
+}
+
+.page-student-quizzes .student-quiz-description {
+  min-height: 40px;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.page-student-quizzes .student-quiz-description.muted {
+  color: var(--color-muted);
+}
+
+.page-student-quizzes .student-quiz-availability {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.page-student-quizzes .student-quiz-availability div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-student-quizzes .student-quiz-availability dt {
+  font-weight: 600;
+}
+
+.page-student-quizzes .student-quiz-availability dd {
+  text-align: right;
+}
+
+@media (max-width: 700px) {
+  .page-student-quizzes .student-quiz-list {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+
+  .page-student-quizzes .student-quiz-availability div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .page-student-quizzes .student-quiz-availability dd {
+    text-align: left;
+  }
+}

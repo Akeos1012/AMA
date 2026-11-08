@@ -1,0 +1,238 @@
+import unittest
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.testclient import TestClient
+
+from app.api import quizzes
+from test_lessons import FakeDatabase, NOW
+
+
+class StudentQuizApiTests(unittest.TestCase):
+    def setUp(self):
+        self.database = FakeDatabase()
+        self.accounts = {
+            "student-1": SimpleNamespace(disabled=False),
+            "student-2": SimpleNamespace(disabled=False),
+            "teacher-1": SimpleNamespace(disabled=False),
+        }
+        self.database.collection("users").documents.update(
+            {
+                "student-1": {"role": "student", "status": "active"},
+                "student-2": {"role": "student", "status": "active"},
+                "teacher-1": {"role": "teacher", "status": "active"},
+            }
+        )
+        self.database.collection("classes").documents.update(
+            {
+                "class-1": {"status": "active"},
+                "class-2": {"status": "active"},
+            }
+        )
+        self.database.collection("subjects").documents["subject-1"] = {
+            "status": "active",
+            "teacher_ids": ["teacher-1"],
+        }
+        self.database.collection("class_teacher_assignments").documents["assignment-1"] = {
+            "class_id": "class-1",
+            "subject_id": "subject-1",
+            "teacher_uid": "teacher-1",
+            "status": "active",
+        }
+        self.database.collection("class_memberships").documents["membership-1"] = {
+            "class_id": "class-1",
+            "student_uid": "student-1",
+            "status": "active",
+        }
+        self.database.collection("class_memberships").documents["membership-2"] = {
+            "class_id": "class-2",
+            "student_uid": "student-2",
+            "status": "active",
+        }
+        self.seed_quiz("quiz-published", status="published")
+        self.seed_quiz("quiz-draft", status="draft")
+        self.seed_quiz("quiz-other-class", class_id="class-2", status="published")
+
+        app = FastAPI()
+        app.include_router(quizzes.router, prefix="/api")
+        app.dependency_overrides[quizzes.verify_firebase_token] = self.mock_verify_token
+        self.database_patch = patch.object(quizzes, "get_database", return_value=self.database)
+        self.auth_patch = patch.object(
+            quizzes.firebase_auth,
+            "get_user",
+            side_effect=self.get_account,
+        )
+        self.database_patch.start()
+        self.auth_patch.start()
+        self.addCleanup(self.database_patch.stop)
+        self.addCleanup(self.auth_patch.stop)
+        self.client = TestClient(app)
+
+    def mock_verify_token(self, request: Request):
+        token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        roles = {"student-1": "student", "student-2": "student", "teacher-1": "teacher"}
+        if token not in roles:
+            raise HTTPException(status_code=401, detail="Invalid Firebase ID token")
+        return {"uid": token, "role": roles[token]}
+
+    def get_account(self, uid):
+        try:
+            return self.accounts[uid]
+        except KeyError:
+            raise quizzes.firebase_auth.UserNotFoundError("User not found", uid) from None
+
+    def seed_quiz(
+        self,
+        quiz_id,
+        class_id="class-1",
+        status="published",
+        opening_at=None,
+        closing_at=None,
+    ):
+        self.database.collection("quizzes").documents[quiz_id] = {
+            "lesson_id": "lesson-1",
+            "class_id": class_id,
+            "subject_id": "subject-1",
+            "teacher_id": "teacher-1",
+            "title": "Cell Energy Quiz",
+            "description": "Review quiz",
+            "opening_at": opening_at,
+            "closing_at": closing_at,
+            "status": status,
+            "questions": [
+                {
+                    "type": "multiple_choice",
+                    "prompt": "Which organelle generates ATP?",
+                    "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+                    "correct_answer": "Mitochondria",
+                    "explanation": "Mitochondria generate ATP.",
+                    "evidence": {"quote": "private", "block_index": 0},
+                },
+                {
+                    "type": "essay",
+                    "prompt": "Explain cellular energy.",
+                    "rubric": ["Mention ATP"],
+                    "sample_solution": "Private sample",
+                    "explanation": "Private explanation",
+                    "evidence": {"quote": "private", "block_index": 0},
+                },
+            ],
+            "validation_report": {"status": "passed"},
+            "model_id": "private-model",
+            "created_at": NOW,
+            "updated_at": NOW,
+            "published_at": NOW if status == "published" else None,
+        }
+
+    def headers(self, uid="student-1"):
+        return {"Authorization": f"Bearer {uid}"}
+
+    def test_authorized_student_lists_published_quizzes(self):
+        response = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([quiz["id"] for quiz in response.json()], ["quiz-published"])
+
+    def test_drafts_and_other_classes_are_excluded(self):
+        response = self.client.get("/api/student/quizzes", headers=self.headers())
+        ids = [quiz["id"] for quiz in response.json()]
+        self.assertNotIn("quiz-draft", ids)
+        self.assertNotIn("quiz-other-class", ids)
+
+    def test_student_can_get_authorized_quiz_detail(self):
+        response = self.client.get(
+            "/api/student/quizzes/quiz-published",
+            headers=self.headers(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], "quiz-published")
+
+    def test_direct_detail_cannot_bypass_class_authorization(self):
+        response = self.client.get(
+            "/api/student/quizzes/quiz-other-class",
+            headers=self.headers(),
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_restricted_fields_are_not_returned(self):
+        response = self.client.get(
+            "/api/student/quizzes/quiz-published",
+            headers=self.headers(),
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        restricted = {
+            "correct_answer", "accepted_alternatives", "explanation", "evidence",
+            "rubric", "sample_solution", "validation_report", "teacher_id", "model_id",
+        }
+        self.assertTrue(restricted.isdisjoint(payload))
+        for question in payload["questions"]:
+            self.assertTrue(restricted.isdisjoint(question))
+
+    def test_inactive_membership_is_rejected(self):
+        self.database.documents["class_memberships"]["membership-1"]["status"] = "inactive"
+        response = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_inactive_class_or_subject_is_rejected(self):
+        self.database.documents["classes"]["class-1"]["status"] = "inactive"
+        response = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+        self.database.documents["classes"]["class-1"]["status"] = "active"
+        self.database.documents["subjects"]["subject-1"]["status"] = "inactive"
+        response = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_missing_active_assignment_is_rejected(self):
+        self.database.documents["class_teacher_assignments"]["assignment-1"]["status"] = "inactive"
+        response = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    @patch("app.services.student_quiz_service.utc_now")
+    def test_opening_and_closing_windows_are_enforced(self, mock_now):
+        mock_now.return_value = NOW
+        self.database.documents["quizzes"]["quiz-published"].update(
+            {
+                "opening_at": NOW + timedelta(hours=1),
+                "closing_at": NOW + timedelta(hours=2),
+            }
+        )
+        before = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(before.json(), [])
+
+        mock_now.return_value = NOW + timedelta(hours=3)
+        after = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(after.json(), [])
+
+    def test_missing_schedule_fields_are_compatible(self):
+        self.database.documents["quizzes"]["quiz-published"].pop("opening_at")
+        self.database.documents["quizzes"]["quiz-published"].pop("closing_at")
+        response = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in response.json()], ["quiz-published"])
+
+    def test_missing_or_invalid_authentication_is_rejected(self):
+        missing = self.client.get("/api/student/quizzes")
+        invalid = self.client.get(
+            "/api/student/quizzes",
+            headers={"Authorization": "Bearer unknown"},
+        )
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(invalid.status_code, 401)
+
+    def test_teacher_cannot_use_student_quiz_routes(self):
+        response = self.client.get(
+            "/api/student/quizzes",
+            headers=self.headers("teacher-1"),
+        )
+        self.assertEqual(response.status_code, 403)
+
+
+if __name__ == "__main__":
+    unittest.main()

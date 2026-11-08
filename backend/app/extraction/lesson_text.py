@@ -37,6 +37,11 @@ class ExtractedLessonContent(BaseModel):
         return None
 
 
+def evidence_id_for_passage(lesson_id: str, block_index: int) -> str:
+    """Return a deterministic evidence ID scoped to one extracted lesson."""
+    return f"lesson:{lesson_id}:block:{block_index}"
+
+
 def extract_lesson_text(
     lesson_data: dict[str, Any],
     min_word_count: int = 15,

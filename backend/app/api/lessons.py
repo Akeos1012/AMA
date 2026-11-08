@@ -20,6 +20,7 @@ from app.ai.ollama_client import OllamaClient
 from app.models.generation import (
     GenerateQuizRequestBody,
     QuizDraft,
+    QuizDraftUpdateRequest,
 )
 from app.models.lesson import (
     LessonCreateRequest,
@@ -62,7 +63,9 @@ from app.services.quiz_generation_service import (
 )
 from app.services.lesson_quiz_service import (
     generate_quiz_for_lesson as generate_quiz_for_lesson_service,
+    publish_quiz as publish_quiz_service,
     quiz_draft_response,
+    update_quiz_draft as update_quiz_draft_service,
 )
 from app.validation.quiz_validator import QuizValidator
 from app.validation.lesson_validation import (
@@ -313,3 +316,26 @@ def generate_quiz_for_lesson(
         body=body,
         orchestrator=orchestrator,
     )
+
+
+@router.patch("/quizzes/{quiz_id}", response_model=QuizDraft)
+def update_quiz_draft(
+    quiz_id: str,
+    body: QuizDraftUpdateRequest,
+    decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+) -> QuizDraft:
+    teacher_uid = require_role(decoded_token, "teacher")
+    database = get_database()
+    validate_active_account(database, teacher_uid, "teacher")
+    return update_quiz_draft_service(database, quiz_id, teacher_uid, body)
+
+
+@router.post("/quizzes/{quiz_id}/publish", response_model=QuizDraft)
+def publish_quiz(
+    quiz_id: str,
+    decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+) -> QuizDraft:
+    teacher_uid = require_role(decoded_token, "teacher")
+    database = get_database()
+    validate_active_account(database, teacher_uid, "teacher")
+    return publish_quiz_service(database, quiz_id, teacher_uid)

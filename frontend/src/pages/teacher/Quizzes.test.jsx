@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import TeacherQuizzes from "./Quizzes.jsx";
+import DraftReview from "./quizzes/QuizDraftReview.jsx";
 import StudentSection from "../student/Section.jsx";
 
 const mocks = vi.hoisted(() => ({
@@ -316,7 +317,9 @@ describe("teacher quiz review", () => {
 
     expect(screen.getByDisplayValue("Changed answer")).toBeTruthy();
     expect(screen.getByText("Draft — teacher review required")).toBeTruthy();
-    expect(screen.getByText(/Changes below are local to this page and are not saved/)).toBeTruthy();
+    expect(
+      screen.getByText(/Review every question before using it with students/),
+    ).toBeTruthy();
     expect(mocks.authenticatedFetch).toHaveBeenCalledTimes(2);
     expect(mocks.authenticatedFetch.mock.calls.some((call) => call[2]?.method === "PATCH")).toBe(
       false,
@@ -324,6 +327,213 @@ describe("teacher quiz review", () => {
     expect(mocks.authenticatedFetch.mock.calls.some((call) => call[2]?.method === "PUT")).toBe(
       false,
     );
+  });
+
+  it("edits a question and quiz title and sends PATCH with updated questions and supported metadata", async () => {
+    const updatedDraft = {
+      ...draft,
+      title: "Updated Cell Energy Quiz",
+      questions: [
+        {
+          ...draft.questions[0],
+          correct_answer: "Changed ATP",
+        },
+        ...draft.questions.slice(1),
+      ],
+      updated_at: "2026-02-01T00:00:00Z",
+    };
+
+    mocks.authenticatedFetch
+      .mockResolvedValueOnce(response(200, [lesson]))
+      .mockResolvedValueOnce(response(201, draft))
+      .mockResolvedValueOnce(response(200, updatedDraft));
+
+    const user = await requestDraft();
+    const answer = await screen.findByRole("textbox", {
+      name: "Question 1 correct answer",
+    });
+    await user.clear(answer);
+    await user.type(answer, "Changed ATP");
+
+    const titleInput = screen.getByRole("textbox", { name: "Quiz title" });
+    await user.clear(titleInput);
+    await user.type(titleInput, "Updated Cell Energy Quiz");
+
+    const saveButton = screen.getByRole("button", { name: "Save Draft" });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Draft changes saved.")).toBeTruthy();
+    });
+
+    const patchCall = mocks.authenticatedFetch.mock.calls.find(
+      (call) => call[2]?.method === "PATCH",
+    );
+    expect(patchCall).toBeTruthy();
+    expect(patchCall[0]).toBe(mocks.user);
+    expect(patchCall[1]).toBe("/api/quizzes/quiz-1");
+
+    const parsedBody = JSON.parse(patchCall[2].body);
+    expect(parsedBody.title).toBe("Updated Cell Energy Quiz");
+    expect(parsedBody.questions[0].correct_answer).toBe("Changed ATP");
+    expect(parsedBody.questions).toHaveLength(4);
+    expect(parsedBody.questions[1].type).toBe("true_false");
+    expect(parsedBody.questions[1].correct_answer).toBe(true);
+    expect(parsedBody.questions[2].type).toBe("identification");
+    expect(parsedBody.questions[2].accepted_alternatives).toEqual(["adenosine triphosphate"]);
+    expect(parsedBody.questions[3].type).toBe("essay");
+    expect(parsedBody.questions[3].rubric).toEqual(["Describe energy storage."]);
+    expect(parsedBody.questions[3].sample_solution).toBe(
+      "ATP stores usable energy for cell processes.",
+    );
+
+    // Verify immutable and server-controlled fields are not sent
+    expect(parsedBody.id).toBeUndefined();
+    expect(parsedBody.lesson_id).toBeUndefined();
+    expect(parsedBody.class_id).toBeUndefined();
+    expect(parsedBody.subject_id).toBeUndefined();
+    expect(parsedBody.teacher_id).toBeUndefined();
+    expect(parsedBody.status).toBeUndefined();
+    expect(parsedBody.validation_report).toBeUndefined();
+    expect(parsedBody.model_id).toBeUndefined();
+    expect(parsedBody.created_at).toBeUndefined();
+    expect(parsedBody.updated_at).toBeUndefined();
+    expect(parsedBody.published_at).toBeUndefined();
+  });
+
+  it("updates the local draft with the successfully saved server response", async () => {
+    const serverSavedDraft = {
+      ...draft,
+      title: "Server Verified Quiz Title",
+      questions: [
+        {
+          ...draft.questions[0],
+          prompt: "Server verified question prompt?",
+        },
+        ...draft.questions.slice(1),
+      ],
+      updated_at: "2026-02-01T00:00:00Z",
+    };
+
+    mocks.authenticatedFetch
+      .mockResolvedValueOnce(response(200, [lesson]))
+      .mockResolvedValueOnce(response(201, draft))
+      .mockResolvedValueOnce(response(200, serverSavedDraft));
+
+    const user = await requestDraft();
+    const saveButton = await screen.findByRole("button", { name: "Save Draft" });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Draft changes saved.")).toBeTruthy();
+    });
+    expect(screen.getByRole("heading", { name: "Server Verified Quiz Title" })).toBeTruthy();
+    expect(screen.getByDisplayValue("Server verified question prompt?")).toBeTruthy();
+  });
+
+  it("preserves local edits and displays error message when save fails", async () => {
+    mocks.authenticatedFetch
+      .mockResolvedValueOnce(response(200, [lesson]))
+      .mockResolvedValueOnce(response(201, draft))
+      .mockResolvedValueOnce(response(500, { detail: "Failed to save quiz draft." }));
+
+    const user = await requestDraft();
+    const answer = await screen.findByRole("textbox", {
+      name: "Question 1 correct answer",
+    });
+    await user.clear(answer);
+    await user.type(answer, "My Unsaved Edit");
+
+    const saveButton = screen.getByRole("button", { name: "Save Draft" });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Unable to save this quiz draft right now. Please try again."),
+      ).toBeTruthy();
+    });
+    expect(screen.getByDisplayValue("My Unsaved Edit")).toBeTruthy();
+  });
+
+  it("prevents duplicate save submissions while a save is in progress", async () => {
+    let resolveSave;
+    mocks.authenticatedFetch
+      .mockResolvedValueOnce(response(200, [lesson]))
+      .mockResolvedValueOnce(response(201, draft))
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+      );
+
+    const user = await requestDraft();
+    const saveButton = await screen.findByRole("button", { name: "Save Draft" });
+    await user.click(saveButton);
+
+    expect(screen.getByText("Saving draft...")).toBeTruthy();
+    expect(saveButton.disabled).toBe(true);
+
+    await user.click(saveButton);
+
+    const patchCalls = mocks.authenticatedFetch.mock.calls.filter(
+      (call) => call[2]?.method === "PATCH",
+    );
+    expect(patchCalls).toHaveLength(1);
+
+    resolveSave(response(200, draft));
+    await waitFor(() => {
+      expect(screen.getByText("Draft changes saved.")).toBeTruthy();
+    });
+    expect(saveButton.disabled).toBe(false);
+  });
+
+  it("disables saving if the quiz has already been published", async () => {
+    const publishedDraft = {
+      ...draft,
+      status: "published",
+      published_at: "2026-01-02T00:00:00Z",
+    };
+
+    mocks.authenticatedFetch
+      .mockResolvedValueOnce(response(200, [lesson]))
+      .mockResolvedValueOnce(response(201, publishedDraft));
+
+    const user = await requestDraft();
+    const publishedBadges = await screen.findAllByText("Published");
+    expect(publishedBadges.length).toBeGreaterThan(0);
+
+    const saveButton = screen.getByRole("button", { name: "Save Draft" });
+    expect(saveButton.disabled).toBe(true);
+
+    await user.click(saveButton);
+
+    const patchCalls = mocks.authenticatedFetch.mock.calls.filter(
+      (call) => call[2]?.method === "PATCH",
+    );
+    expect(patchCalls).toHaveLength(0);
+  });
+
+  it("disables Save Draft when DraftReview renders a published draft directly", async () => {
+    const publishedDraft = {
+      ...draft,
+      status: "published",
+      published_at: "2026-01-02T00:00:00Z",
+    };
+    render(
+      <DraftReview
+        draft={publishedDraft}
+        lesson={lesson}
+        setDraft={vi.fn()}
+        user={mocks.user}
+      />,
+    );
+
+    const saveButton = screen.getByRole("button", { name: "Save Draft" });
+    expect(saveButton.disabled).toBe(true);
+
+    const user = userEvent.setup();
+    await user.click(saveButton);
+    expect(mocks.authenticatedFetch).not.toHaveBeenCalled();
   });
 
   it("does not show teacher answers in the student-facing section", () => {

@@ -19,6 +19,7 @@ from app.models.generation import (
 from app.extraction.lesson_text import (
     ExtractedLessonContent,
     InsufficientLessonContentError,
+    evidence_id_for_passage,
     extract_lesson_text,
 )
 from app.models.lesson import HeadingBlock, ParagraphBlock, BulletListBlock, LessonContent
@@ -269,6 +270,10 @@ class TestLessonTextExtraction(unittest.TestCase):
 
         repeated = extract_lesson_text(lesson_data, min_word_count=15)
         self.assertEqual(repeated.full_text, extracted.full_text)
+        self.assertEqual(
+            evidence_id_for_passage(extracted.lesson_id, extracted.passages[3].block_index),
+            "lesson:lesson-bio-1:block:3",
+        )
         self.assertEqual(
             [
                 (passage.block_index, passage.block_type, passage.text)
@@ -626,8 +631,13 @@ class TestPromptBuilder(unittest.TestCase):
         # Check user prompt contents
         self.assertIn("LESSON TITLE: Newtonian Mechanics", user_prompt)
         self.assertIn("TOPIC: Physics", user_prompt)
-        self.assertIn("[Block 0] Newton's Laws", user_prompt)
-        self.assertIn("[Block 1] Newton's first law states", user_prompt)
+        self.assertIn("[Evidence ID: lesson:lesson-42:block:0] [Block 0] Newton's Laws", user_prompt)
+        self.assertIn(
+            "[Evidence ID: lesson:lesson-42:block:1] [Block 1] Newton's first law states",
+            user_prompt,
+        )
+        self.assertIn('"evidence_id": "ID copied from the supplied lesson"', user_prompt)
+        self.assertNotIn('"evidence": {"quote"', user_prompt)
         self.assertIn("- multiple_choice: 2", user_prompt)
         self.assertIn("- true_false: 1", user_prompt)
         self.assertIn("Total questions requested: 3", user_prompt)
@@ -680,8 +690,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "correct_answer": "Mitochondria",
                     "explanation": "Mitochondria synthesize ATP.",
                     "evidence": {
-                        "quote": "The mitochondrion is the powerhouse of the cell, generating adenosine triphosphate (ATP).",
-                        "block_index": 0,
+                        "evidence_id": "lesson:lesson-bio:block:0",
                     },
                 },
                 {
@@ -690,8 +699,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "correct_answer": True,
                     "explanation": "The text explicitly states plant cells have a cellulose wall.",
                     "evidence": {
-                        "quote": "Plant cells possess a rigid cell wall composed primarily of cellulose.",
-                        "block_index": 1,
+                        "evidence_id": "lesson:lesson-bio:block:1",
                     },
                 },
                 {
@@ -701,8 +709,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "accepted_alternatives": ["Adenosine Triphosphate"],
                     "explanation": "ATP is the energy currency.",
                     "evidence": {
-                        "quote": "generating adenosine triphosphate (ATP).",
-                        "block_index": 0,
+                        "evidence_id": "lesson:lesson-bio:block:0",
                     },
                 },
                 {
@@ -715,8 +722,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "sample_solution": "The plant cell wall provides structural support...",
                     "explanation": "Supported by the structural discussion in paragraph 2.",
                     "evidence": {
-                        "quote": "Plant cells possess a rigid cell wall composed primarily of cellulose.",
-                        "block_index": 1,
+                        "evidence_id": "lesson:lesson-bio:block:1",
                     },
                 },
             ],
@@ -745,6 +751,89 @@ class TestQuizGenerationService(unittest.TestCase):
         self.assertEqual(result.quiz.questions[1].type, "true_false")
         self.assertEqual(result.quiz.questions[2].type, "identification")
         self.assertEqual(result.quiz.questions[3].type, "essay")
+
+    def test_resolves_evidence_id_to_original_passage(self):
+        payload = {
+            "title": "Evidence Quiz",
+            "topic": "Cytology",
+            "questions": [
+                {
+                    "type": "multiple_choice",
+                    "prompt": "Which organelle generates ATP?",
+                    "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+                    "correct_answer": "Mitochondria",
+                    "explanation": "Mitochondria generate ATP.",
+                    "evidence": {
+                        "evidence_id": evidence_id_for_passage("lesson-bio", 0),
+                    },
+                }
+            ],
+        }
+        result = QuizGenerationService(MockLLMClient(response_json=payload)).generate_quiz(
+            self.lesson,
+            QuizGenerationRequest(
+                lesson_id="lesson-bio",
+                question_counts={"multiple_choice": 1},
+            ),
+        )
+
+        evidence = result.quiz.questions[0].evidence
+        self.assertEqual(evidence.quote, self.lesson.passages[0].text)
+        self.assertEqual(evidence.block_index, 0)
+        self.assertFalse(hasattr(evidence, "evidence_id"))
+
+    def test_multiple_questions_can_reuse_evidence_id(self):
+        question = {
+            "type": "multiple_choice",
+            "prompt": "Which organelle generates ATP?",
+            "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+            "correct_answer": "Mitochondria",
+            "explanation": "Mitochondria generate ATP.",
+            "evidence": {"evidence_id": evidence_id_for_passage("lesson-bio", 0)},
+        }
+        payload = {
+            "title": "Repeated Evidence Quiz",
+            "topic": "Cytology",
+            "questions": [question, dict(question)],
+        }
+        result = QuizGenerationService(MockLLMClient(response_json=payload)).generate_quiz(
+            self.lesson,
+            QuizGenerationRequest(
+                lesson_id="lesson-bio",
+                question_counts={"multiple_choice": 2},
+            ),
+        )
+
+        self.assertEqual(
+            result.quiz.questions[0].evidence.quote,
+            result.quiz.questions[1].evidence.quote,
+        )
+
+    def test_rejects_missing_unknown_and_cross_lesson_evidence_ids(self):
+        for evidence in ({}, {"evidence_id": "lesson:lesson-bio:block:99"}, {"evidence_id": "lesson:other:block:0"}):
+            payload = {
+                "title": "Evidence Quiz",
+                "topic": "Cytology",
+                "questions": [
+                    {
+                        "type": "multiple_choice",
+                        "prompt": "Which organelle generates ATP?",
+                        "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+                        "correct_answer": "Mitochondria",
+                        "explanation": "Mitochondria generate ATP.",
+                        "evidence": evidence,
+                    }
+                ],
+            }
+            service = QuizGenerationService(MockLLMClient(response_json=payload))
+            with self.assertRaises(SchemaValidationError):
+                service.generate_quiz(
+                    self.lesson,
+                    QuizGenerationRequest(
+                        lesson_id="lesson-bio",
+                        question_counts={"multiple_choice": 1},
+                    ),
+                )
 
     def test_rejects_empty_lesson_content(self):
         mock_client = MockLLMClient(response_json={})
@@ -795,7 +884,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "options": ["A", "B", "C"],  # only 3 options (violates 4 options requirement)
                     "correct_answer": "A",
                     "explanation": "Exp",
-                    "evidence": {"quote": "Evidence text", "block_index": 0},
+                    "evidence": {"evidence_id": "lesson:lesson-bio:block:0"},
                 }
             ],
         }
@@ -819,7 +908,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "options": ["A", "B", "C", "D"],
                     "correct_answer": "A",
                     "explanation": "Exp",
-                    "evidence": {"quote": "Evidence", "block_index": 0},
+                    "evidence": {"evidence_id": "lesson:lesson-bio:block:0"},
                 }
             ],
         }
@@ -843,7 +932,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "prompt": "Statement?",
                     "correct_answer": True,
                     "explanation": "Exp",
-                    "evidence": {"quote": "Evidence", "block_index": 0},
+                    "evidence": {"evidence_id": "lesson:lesson-bio:block:0"},
                 }
             ],
         }
@@ -1194,25 +1283,23 @@ class TestOrchestrator(unittest.TestCase):
                     "correct_answer": "Mitochondria",
                     "explanation": "Mitochondria generate ATP.",
                     "evidence": {
-                        "quote": "Mitochondria are organelles that generate chemical energy in the form of ATP.",
-                        "block_index": 0,
+                        "evidence_id": "lesson:lesson-orch:block:0",
                     },
                 }
             ],
         }
-        self.invalid_quote_payload = {
+        self.invalid_grounding_payload = {
             "title": "Energetics Quiz",
             "topic": "Cytology",
             "questions": [
                 {
                     "type": "multiple_choice",
-                    "prompt": "Which organelle generates ATP?",
-                    "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
-                    "correct_answer": "Mitochondria",
-                    "explanation": "Mitochondria generate ATP.",
+                    "prompt": "What color is the sky?",
+                    "options": ["Vacuole", "Ribosome", "Nucleus", "Mitochondria"],
+                    "correct_answer": "Vacuole",
+                    "explanation": "Vacuole generate ATP.",
                     "evidence": {
-                        "quote": "This sentence is completely fabricated.",
-                        "block_index": 0,
+                        "evidence_id": "lesson:lesson-orch:block:0",
                     },
                 }
             ],
@@ -1232,8 +1319,8 @@ class TestOrchestrator(unittest.TestCase):
         self.assertEqual(result.validation_report.status, "passed")
 
     def test_first_attempt_fails_validation_second_attempt_succeeds(self):
-        # First attempt produces fabricated quote; second attempt fixes it
-        mock_client = SequenceMockLLMClient([self.invalid_quote_payload, self.valid_mcq_payload])
+        # First attempt has valid source evidence but unsupported question content.
+        mock_client = SequenceMockLLMClient([self.invalid_grounding_payload, self.valid_mcq_payload])
         service = QuizGenerationService(llm_client=mock_client)
         orchestrator = QuizGenerationOrchestrator(generation_service=service, max_attempts=2)
 
@@ -1246,11 +1333,11 @@ class TestOrchestrator(unittest.TestCase):
         # Ensure corrective feedback was sent to attempt 2 prompt
         second_prompt = mock_client.prompts[1][1]
         self.assertIn("CORRECTIVE DIRECTIVE FOR RETRY ATTEMPT 2", second_prompt)
-        self.assertIn("fabricated", second_prompt.lower())
+        self.assertIn("does not support the correct answer", second_prompt.lower())
 
     def test_all_attempts_fail_validation_returns_clean_failure(self):
-        # Both attempts produce invalid quotes
-        mock_client = SequenceMockLLMClient([self.invalid_quote_payload, self.invalid_quote_payload])
+        # Both attempts fail validation against the resolved source evidence.
+        mock_client = SequenceMockLLMClient([self.invalid_grounding_payload, self.invalid_grounding_payload])
         service = QuizGenerationService(llm_client=mock_client)
         orchestrator = QuizGenerationOrchestrator(generation_service=service, max_attempts=2)
 
@@ -1265,7 +1352,7 @@ class TestOrchestrator(unittest.TestCase):
         self.assertEqual(result.validation_report.status, "failed")
 
     def test_raise_on_failure_flag(self):
-        mock_client = SequenceMockLLMClient([self.invalid_quote_payload])
+        mock_client = SequenceMockLLMClient([self.invalid_grounding_payload])
         service = QuizGenerationService(llm_client=mock_client)
         orchestrator = QuizGenerationOrchestrator(generation_service=service, max_attempts=1)
 
@@ -1322,7 +1409,7 @@ class TestOrchestrator(unittest.TestCase):
         self.assertEqual(mock_client.call_count, 0)
 
     def test_question_counts_do_not_change_during_retries(self):
-        mock_client = SequenceMockLLMClient([self.invalid_quote_payload, self.valid_mcq_payload])
+        mock_client = SequenceMockLLMClient([self.invalid_grounding_payload, self.valid_mcq_payload])
         service = QuizGenerationService(llm_client=mock_client)
         orchestrator = QuizGenerationOrchestrator(generation_service=service, max_attempts=2)
 
@@ -1466,6 +1553,45 @@ class TestQuizGenerationAPI(unittest.TestCase):
 
         self.client = TestClient(self.app)
 
+    def seed_quiz(self, quiz_id="quiz-1", teacher_id="teacher-1", status="draft", include_metadata=True):
+        quiz = {
+            "lesson_id": "lesson-1",
+            "class_id": "class-1",
+            "subject_id": "subject-1",
+            "teacher_id": teacher_id,
+            "title": "Cell Energy Quiz",
+            "status": status,
+            "questions": [
+                {
+                    "type": "multiple_choice",
+                    "prompt": "Which organelle generates ATP?",
+                    "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+                    "correct_answer": "Mitochondria",
+                    "explanation": "Mitochondria generate ATP.",
+                    "evidence": {
+                        "quote": "Mitochondria are membrane-bound cell organelles that generate chemical energy in the form of adenosine triphosphate (ATP) for cellular processes.",
+                        "block_index": 0,
+                    },
+                }
+            ],
+            "validation_report": {
+                "status": "passed",
+                "is_valid": True,
+                "grounding_passed": True,
+                "correctness_passed": True,
+                "question_reports": [],
+                "general_issues": [],
+            },
+            "model_id": "test-model",
+            "created_at": NOW,
+            "updated_at": NOW,
+            "published_at": NOW if status == "published" else None,
+        }
+        if include_metadata:
+            quiz.update({"description": None, "opening_at": None, "closing_at": None})
+        self.database.collection("quizzes").documents[quiz_id] = quiz
+        return quiz
+
     def mock_verify_token(self, request: Request):
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -1493,6 +1619,308 @@ class TestQuizGenerationAPI(unittest.TestCase):
             json={"question_counts": {"multiple_choice": 1}},
         )
         self.assertEqual(res.status_code, 401)
+
+    def test_teacher_can_update_owned_draft(self):
+        self.seed_quiz(include_metadata=False)
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={
+                "title": "Updated Cell Energy Quiz",
+                "description": "A review of ATP.",
+                "opening_at": "2026-10-16T09:00:00+08:00",
+                "closing_at": "2026-10-17T09:00:00+08:00",
+                "questions": self.database.collection("quizzes").documents["quiz-1"]["questions"],
+            },
+        )
+
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["title"], "Updated Cell Energy Quiz")
+        self.assertEqual(data["description"], "A review of ATP.")
+        self.assertEqual(data["opening_at"], "2026-10-16T01:00:00Z")
+        self.assertEqual(data["closing_at"], "2026-10-17T01:00:00Z")
+        self.assertEqual(data["questions"][0]["correct_answer"], "Mitochondria")
+        self.assertEqual(
+            self.database.documents["quizzes"]["quiz-1"]["validation_report"]["status"],
+            "passed",
+        )
+
+    def test_student_cannot_update_quiz_draft(self):
+        self.seed_quiz()
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer student-1"},
+            json={"title": "Not allowed"},
+        )
+        self.assertEqual(res.status_code, 403)
+
+    def test_teacher_cannot_update_another_teachers_quiz(self):
+        self.seed_quiz(teacher_id="teacher-2")
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={"title": "Not allowed"},
+        )
+        self.assertEqual(res.status_code, 404)
+
+    def test_published_quiz_cannot_be_modified(self):
+        self.seed_quiz(status="published")
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={"title": "Not allowed"},
+        )
+        self.assertEqual(res.status_code, 409)
+
+    def test_teacher_can_publish_owned_draft(self):
+        self.seed_quiz()
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "published")
+        self.assertEqual(data["published_at"], "2026-10-15T12:00:00Z")
+        stored = self.database.documents["quizzes"]["quiz-1"]
+        self.assertEqual(stored["status"], "published")
+        self.assertEqual(stored["published_at"], NOW)
+        self.assertEqual(stored["updated_at"], NOW)
+
+    def test_student_cannot_publish_quiz(self):
+        self.seed_quiz()
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer student-1"},
+        )
+        self.assertEqual(res.status_code, 403)
+
+    def test_missing_authentication_cannot_publish_quiz(self):
+        self.seed_quiz()
+        res = self.client.post("/quizzes/quiz-1/publish")
+        self.assertEqual(res.status_code, 401)
+
+    def test_inactive_teacher_cannot_publish_quiz(self):
+        self.seed_quiz()
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-disabled"},
+        )
+        self.assertEqual(res.status_code, 403)
+
+    def test_teacher_cannot_publish_another_teachers_quiz(self):
+        self.seed_quiz(teacher_id="teacher-2")
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+        self.assertEqual(res.status_code, 404)
+
+    def test_already_published_quiz_cannot_be_published_again(self):
+        self.seed_quiz(status="published")
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+        self.assertEqual(res.status_code, 409)
+
+    def assert_publish_rejected_without_modification(self, mutate_access):
+        self.seed_quiz()
+        before = dict(self.database.documents["quizzes"]["quiz-1"])
+        mutate_access()
+
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"], before)
+
+    def test_revoked_teacher_assignment_cannot_publish(self):
+        self.assert_publish_rejected_without_modification(
+            lambda: self.database.documents["class_teacher_assignments"]["assign-1"].update(
+                {"status": "inactive"}
+            )
+        )
+
+    def test_removed_subject_assignment_cannot_publish(self):
+        self.assert_publish_rejected_without_modification(
+            lambda: self.database.documents["subjects"]["subject-1"].update(
+                {"teacher_ids": []}
+            )
+        )
+
+    def test_invalid_questions_cannot_be_published(self):
+        self.seed_quiz()
+        before = dict(self.database.documents["quizzes"]["quiz-1"])
+        self.database.documents["quizzes"]["quiz-1"]["questions"] = [
+            {"type": "multiple_choice", "prompt": "Incomplete"}
+        ]
+        before_invalid = dict(self.database.documents["quizzes"]["quiz-1"])
+
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"], before_invalid)
+        self.assertEqual(before["status"], "draft")
+
+    def test_failed_validation_does_not_publish_quiz(self):
+        self.seed_quiz()
+        self.database.documents["quizzes"]["quiz-1"]["questions"][0]["evidence"][
+            "quote"
+        ] = "This passage does not exist in the lesson."
+        before = dict(self.database.documents["quizzes"]["quiz-1"])
+
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"], before)
+
+    def test_invalid_schedule_cannot_be_published(self):
+        self.seed_quiz()
+        self.database.documents["quizzes"]["quiz-1"].update(
+            {
+                "opening_at": datetime(2026, 10, 16, 1, 0),
+                "closing_at": datetime(2026, 10, 17, 1, 0),
+            }
+        )
+        before = dict(self.database.documents["quizzes"]["quiz-1"])
+
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"], before)
+
+    def test_reversed_schedule_cannot_be_published(self):
+        self.seed_quiz()
+        self.database.documents["quizzes"]["quiz-1"].update(
+            {
+                "opening_at": datetime(2026, 10, 17, 1, 0, tzinfo=timezone.utc),
+                "closing_at": datetime(2026, 10, 16, 1, 0, tzinfo=timezone.utc),
+            }
+        )
+
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(
+            self.database.documents["quizzes"]["quiz-1"]["status"],
+            "draft",
+        )
+
+    def test_invalid_question_data_is_rejected(self):
+        self.seed_quiz()
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={"questions": [{"type": "multiple_choice", "prompt": "Incomplete"}]},
+        )
+        self.assertEqual(res.status_code, 422)
+
+    def test_invalid_opening_and_closing_dates_are_rejected(self):
+        self.seed_quiz()
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={
+                "opening_at": "2026-10-17T09:00:00+08:00",
+                "closing_at": "2026-10-16T09:00:00+08:00",
+            },
+        )
+        self.assertEqual(res.status_code, 422)
+
+    def test_invalid_datetime_string_is_rejected(self):
+        self.seed_quiz()
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={"opening_at": "not-a-datetime"},
+        )
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(res.json()["detail"][0]["type"], "value_error")
+
+    def test_existing_quiz_without_metadata_remains_compatible(self):
+        self.seed_quiz(include_metadata=False)
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={"description": "Added later"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["description"], "Added later")
+        self.assertIsNone(res.json()["opening_at"])
+        self.assertIsNone(res.json()["closing_at"])
+
+    def assert_update_rejected_without_modification(self, mutate_access):
+        self.seed_quiz()
+        before = dict(self.database.documents["quizzes"]["quiz-1"])
+        mutate_access()
+
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={"title": "Should not save"},
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"], before)
+
+    def test_teacher_with_inactive_assignment_cannot_update_owned_draft(self):
+        self.assert_update_rejected_without_modification(
+            lambda: self.database.documents["class_teacher_assignments"]["assign-1"].update(
+                {"status": "inactive"}
+            )
+        )
+
+    def test_teacher_removed_from_subject_cannot_update(self):
+        self.assert_update_rejected_without_modification(
+            lambda: self.database.documents["subjects"]["subject-1"].update(
+                {"teacher_ids": []}
+            )
+        )
+
+    def test_inactive_class_prevents_quiz_update(self):
+        self.assert_update_rejected_without_modification(
+            lambda: self.database.documents["classes"]["class-1"].update(
+                {"status": "inactive"}
+            )
+        )
+
+    def test_inactive_subject_prevents_quiz_update(self):
+        self.assert_update_rejected_without_modification(
+            lambda: self.database.documents["subjects"]["subject-1"].update(
+                {"status": "inactive"}
+            )
+        )
+
+    def test_quiz_lesson_class_subject_mismatch_is_rejected_without_modification(self):
+        self.seed_quiz()
+        self.database.documents["quizzes"]["quiz-1"]["class_id"] = "class-other"
+        expected = dict(self.database.documents["quizzes"]["quiz-1"])
+
+        res = self.client.patch(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={"title": "Should not save"},
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"], expected)
 
     def test_student_role_rejected(self):
         res = self.client.post(
@@ -1623,6 +2051,12 @@ class TestQuizGenerationAPI(unittest.TestCase):
         self.assertEqual(data["title"], "Cell Energy Quiz")
         self.assertEqual(len(data["questions"]), 1)
         self.assertEqual(data["questions"][0]["type"], "multiple_choice")
+        self.assertEqual(
+            data["questions"][0]["evidence"]["quote"],
+            "Mitochondria are membrane-bound cell organelles that generate chemical energy in the form of adenosine triphosphate (ATP) for cellular processes.",
+        )
+        self.assertEqual(data["questions"][0]["evidence"]["block_index"], 0)
+        self.assertNotIn("evidence_id", data["questions"][0]["evidence"])
         self.assertEqual(data["model_id"], "qwen2.5:3b")
         generated_lesson = self.mock_orchestrator.orchestrate_generation.call_args.kwargs[
             "lesson"
@@ -1879,8 +2313,7 @@ class TestServicePassesSchema(unittest.TestCase):
                     "correct_answer": "Mitochondria",
                     "explanation": "Mitochondria generate ATP.",
                     "evidence": {
-                        "quote": "Mitochondria are organelles that generate ATP for cellular energy.",
-                        "block_index": 0,
+                        "evidence_id": "lesson:lesson-schema-test:block:0",
                     },
                 }
             ],
@@ -2033,8 +2466,7 @@ class TestOrchestratorMalformedRetryAndFailure(unittest.TestCase):
                     "correct_answer": "Mitochondria",
                     "explanation": "Mitochondria generate ATP.",
                     "evidence": {
-                        "quote": "Mitochondria are organelles that generate chemical energy in the form of ATP.",
-                        "block_index": 0,
+                        "evidence_id": "lesson:lesson-retry:block:0",
                     },
                 }
             ],
@@ -2050,8 +2482,7 @@ class TestOrchestratorMalformedRetryAndFailure(unittest.TestCase):
                     "correct_answer": "Mitochondria",
                     "explanation": "Mitochondria generate ATP.",
                     "evidence": {
-                        "quote": "Mitochondria are organelles that generate chemical energy in the form of ATP.",
-                        "block_index": 0,
+                        "evidence_id": "lesson:lesson-retry:block:0",
                     },
                 }
             ],
@@ -2195,13 +2626,12 @@ class TestValidationDiagnostics(unittest.TestCase):
             "questions": [
                 {
                     "type": "multiple_choice",
-                    "prompt": "Which organelle generates ATP?",
+                    "prompt": "What color is the sky?",
                     "options": ["SecretAnswer", "B", "C", "D"],
                     "correct_answer": "SecretAnswer",
                     "explanation": "Explanation text.",
                     "evidence": {
-                        "quote": "Fabricated quote not in lesson.",
-                        "block_index": 0,
+                        "evidence_id": "lesson:lesson-diag:block:0",
                     },
                 }
             ],
