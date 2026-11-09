@@ -1,6 +1,13 @@
 from typing import Annotated, Literal, Union
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 
 NonEmptyText = Annotated[
@@ -63,4 +70,39 @@ class StudentQuizResponse(BaseModel):
     description: str | None = None
     opening_at: AwareDatetime | None = None
     closing_at: AwareDatetime | None = None
+    grade_level: str | None = None
+    section: str | None = None
     questions: list[StudentQuizQuestion] = Field(min_length=1)
+
+
+class StudentQuizListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    id: NonEmptyText
+    title: NonEmptyText
+    description: str | None = None
+    opening_at: AwareDatetime | None = None
+    closing_at: AwareDatetime | None = None
+    grade_level: str | None = None
+    section: str | None = None
+    status: Literal["scheduled", "open", "closed", "answered"]
+
+
+class StudentQuizAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    question_id: int = Field(ge=0)
+    answer: str | bool
+
+
+class StudentQuizSubmissionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    answers: list[StudentQuizAnswer] = Field(min_length=1)
+
+
+class StudentQuizSubmissionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    id: NonEmptyText
+    status: Literal["answered"]

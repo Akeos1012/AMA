@@ -598,6 +598,79 @@ class MockLLMClient(BaseLLMClient):
         )
 
 
+class TestGeneratedMultipleChoiceOptionIndex(unittest.TestCase):
+    def setUp(self):
+        self.service = QuizGenerationService(
+            llm_client=MockLLMClient(response_json={})
+        )
+        self.question = {
+            "type": "multiple_choice",
+            "prompt": "Which option is correct?",
+            "options": ["First choice", "Second choice", "Third choice", "Fourth choice"],
+            "explanation": "The selected option is supported by the lesson.",
+            "evidence": {"quote": "Lesson evidence.", "block_index": 0},
+        }
+
+    def test_each_valid_index_derives_answer_from_corresponding_option(self):
+        for option_index, expected_answer in enumerate(self.question["options"]):
+            with self.subTest(option_index=option_index):
+                parsed = self.service._parse_question(
+                    {**self.question, "correct_option_index": option_index},
+                    0,
+                )
+                self.assertEqual(parsed.correct_answer, expected_answer)
+                self.assertFalse(hasattr(parsed, "correct_option_index"))
+
+    def test_negative_option_index_is_rejected(self):
+        with self.assertRaises(SchemaValidationError):
+            self.service._parse_question(
+                {**self.question, "correct_option_index": -1},
+                0,
+            )
+
+    def test_out_of_range_option_index_is_rejected(self):
+        with self.assertRaises(SchemaValidationError):
+            self.service._parse_question(
+                {**self.question, "correct_option_index": 4},
+                0,
+            )
+
+    def test_missing_option_index_is_rejected(self):
+        with self.assertRaises(SchemaValidationError):
+            self.service._parse_question(self.question, 0)
+
+    def test_non_integer_option_index_is_rejected(self):
+        for invalid_index in (True, 1.0, "1", None):
+            with self.subTest(invalid_index=invalid_index):
+                with self.assertRaises(SchemaValidationError):
+                    self.service._parse_question(
+                        {**self.question, "correct_option_index": invalid_index},
+                        0,
+                    )
+
+    def test_malformed_options_are_rejected(self):
+        invalid_options = (
+            None,
+            "First, Second, Third, Fourth",
+            ["First choice", "Second choice", "Third choice"],
+            ["First choice", "Second choice", "Third choice", "Fourth choice", "Extra"],
+            ["First choice", "Second choice", "Third choice", None],
+            ["First choice", "Second choice", "Third choice", ""],
+            ["First choice", "Second choice", "Third choice", "first choice"],
+        )
+        for options in invalid_options:
+            with self.subTest(options=options):
+                with self.assertRaises(SchemaValidationError):
+                    self.service._parse_question(
+                        {
+                            **self.question,
+                            "options": options,
+                            "correct_option_index": 0,
+                        },
+                        0,
+                    )
+
+
 class TestPromptBuilder(unittest.TestCase):
     def setUp(self):
         self.lesson = ExtractedLessonContent(
@@ -643,6 +716,12 @@ class TestPromptBuilder(unittest.TestCase):
         self.assertIn("Total questions requested: 3", user_prompt)
         self.assertIn("TEACHER INSTRUCTIONS / FOCUS:\nFocus on inertia.", user_prompt)
 
+    def test_multiple_choice_prompt_uses_option_index_not_duplicate_answer(self):
+        _, user_prompt = build_quiz_prompt(self.lesson, self.request)
+
+        self.assertIn('"correct_option_index": integer from 0 to 3', user_prompt)
+        self.assertIn('Do NOT output a separate "correct_answer"', user_prompt)
+
     def test_build_prompt_rejects_empty_lesson(self):
         empty_lesson = ExtractedLessonContent(
             lesson_id="empty",
@@ -687,7 +766,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "type": "multiple_choice",
                     "prompt": "Which organelle generates ATP?",
                     "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
-                    "correct_answer": "Mitochondria",
+                    "correct_option_index": 0,
                     "explanation": "Mitochondria synthesize ATP.",
                     "evidence": {
                         "evidence_id": "lesson:lesson-bio:block:0",
@@ -761,7 +840,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "type": "multiple_choice",
                     "prompt": "Which organelle generates ATP?",
                     "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
-                    "correct_answer": "Mitochondria",
+                    "correct_option_index": 0,
                     "explanation": "Mitochondria generate ATP.",
                     "evidence": {
                         "evidence_id": evidence_id_for_passage("lesson-bio", 0),
@@ -787,7 +866,7 @@ class TestQuizGenerationService(unittest.TestCase):
             "type": "multiple_choice",
             "prompt": "Which organelle generates ATP?",
             "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
-            "correct_answer": "Mitochondria",
+            "correct_option_index": 0,
             "explanation": "Mitochondria generate ATP.",
             "evidence": {"evidence_id": evidence_id_for_passage("lesson-bio", 0)},
         }
@@ -819,7 +898,7 @@ class TestQuizGenerationService(unittest.TestCase):
                         "type": "multiple_choice",
                         "prompt": "Which organelle generates ATP?",
                         "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
-                        "correct_answer": "Mitochondria",
+                        "correct_option_index": 0,
                         "explanation": "Mitochondria generate ATP.",
                         "evidence": evidence,
                     }
@@ -882,7 +961,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "type": "multiple_choice",
                     "prompt": "What organelle?",
                     "options": ["A", "B", "C"],  # only 3 options (violates 4 options requirement)
-                    "correct_answer": "A",
+                    "correct_option_index": 0,
                     "explanation": "Exp",
                     "evidence": {"evidence_id": "lesson:lesson-bio:block:0"},
                 }
@@ -906,7 +985,7 @@ class TestQuizGenerationService(unittest.TestCase):
                     "type": "multiple_choice",
                     "prompt": "Q1",
                     "options": ["A", "B", "C", "D"],
-                    "correct_answer": "A",
+                    "correct_option_index": 0,
                     "explanation": "Exp",
                     "evidence": {"evidence_id": "lesson:lesson-bio:block:0"},
                 }
@@ -1280,7 +1359,7 @@ class TestOrchestrator(unittest.TestCase):
                     "type": "multiple_choice",
                     "prompt": "Which organelle generates ATP?",
                     "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
-                    "correct_answer": "Mitochondria",
+                    "correct_option_index": 0,
                     "explanation": "Mitochondria generate ATP.",
                     "evidence": {
                         "evidence_id": "lesson:lesson-orch:block:0",
@@ -1296,7 +1375,7 @@ class TestOrchestrator(unittest.TestCase):
                     "type": "multiple_choice",
                     "prompt": "What color is the sky?",
                     "options": ["Vacuole", "Ribosome", "Nucleus", "Mitochondria"],
-                    "correct_answer": "Vacuole",
+                    "correct_option_index": 0,
                     "explanation": "Vacuole generate ATP.",
                     "evidence": {
                         "evidence_id": "lesson:lesson-orch:block:0",
@@ -1465,6 +1544,7 @@ class TestQuizGenerationAPI(unittest.TestCase):
         self.database.collection("classes").documents["class-1"] = {
             "name": "Class 101",
             "grade_level": "Grade 1",
+            "section": "A",
             "status": "active",
         }
         self.database.collection("subjects").documents["subject-1"] = {
@@ -1472,6 +1552,7 @@ class TestQuizGenerationAPI(unittest.TestCase):
             "code": "BIO101",
             "status": "active",
             "teacher_ids": ["teacher-1"],
+            "grade_levels": ["Grade 1"],
         }
         self.database.collection("class_teacher_assignments").documents["assign-1"] = {
             "class_id": "class-1",
@@ -1545,9 +1626,15 @@ class TestQuizGenerationAPI(unittest.TestCase):
 
         self.database_patch = patch.object(lessons, "get_database", return_value=self.database)
         self.database_patch.start()
+        self.publish_clock_patch = patch(
+            "app.services.lesson_quiz_service.utc_now",
+            return_value=NOW,
+        )
+        self.publish_clock_patch.start()
         self.auth_patch = patch.object(lessons.firebase_auth, "get_user", side_effect=self.get_account)
         self.auth_patch.start()
         self.addCleanup(self.database_patch.stop)
+        self.addCleanup(self.publish_clock_patch.stop)
         self.addCleanup(self.auth_patch.stop)
         self.addCleanup(self.app.dependency_overrides.clear)
 
@@ -1592,6 +1679,16 @@ class TestQuizGenerationAPI(unittest.TestCase):
         self.database.collection("quizzes").documents[quiz_id] = quiz
         return quiz
 
+    def publish_payload(self, **overrides):
+        return {
+            "title": "Published Cell Energy Quiz",
+            "description": "Review ATP during the scheduled window.",
+            "target_class_id": "class-1",
+            "opening_at": "2026-10-16T09:00:00+08:00",
+            "closing_at": "2026-10-17T09:00:00+08:00",
+            **overrides,
+        }
+
     def mock_verify_token(self, request: Request):
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -1619,6 +1716,84 @@ class TestQuizGenerationAPI(unittest.TestCase):
             json={"question_counts": {"multiple_choice": 1}},
         )
         self.assertEqual(res.status_code, 401)
+
+    def test_teacher_can_list_owned_drafts_with_answer_keys(self):
+        self.seed_quiz()
+        self.seed_quiz(
+            quiz_id="quiz-other-teacher",
+            teacher_id="teacher-2",
+        )
+        self.seed_quiz(
+            quiz_id="quiz-published",
+            status="published",
+        )
+
+        res = self.client.get(
+            "/quizzes",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual([quiz["id"] for quiz in data], ["quiz-1"])
+        self.assertEqual(data[0]["teacher_id"], "teacher-1")
+        self.assertEqual(
+            data[0]["questions"][0]["correct_answer"],
+            "Mitochondria",
+        )
+
+    def test_teacher_with_no_drafts_gets_empty_list(self):
+        self.seed_quiz(
+            quiz_id="quiz-other-teacher",
+            teacher_id="teacher-2",
+        )
+        self.seed_quiz(
+            quiz_id="quiz-published",
+            status="published",
+        )
+
+        res = self.client.get(
+            "/quizzes",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), [])
+
+    def test_missing_authentication_cannot_list_quiz_drafts(self):
+        res = self.client.get("/quizzes")
+
+        self.assertEqual(res.status_code, 401)
+
+    def test_teacher_lists_only_owned_published_quizzes(self):
+        self.seed_quiz(quiz_id="quiz-published", status="published")
+        self.seed_quiz(
+            quiz_id="quiz-other-teacher",
+            teacher_id="teacher-2",
+            status="published",
+        )
+        response = self.client.get(
+            "/quizzes/published",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in response.json()], ["quiz-published"])
+
+    def test_non_teacher_cannot_list_quiz_drafts(self):
+        res = self.client.get(
+            "/quizzes",
+            headers={"Authorization": "Bearer student-1"},
+        )
+
+        self.assertEqual(res.status_code, 403)
+
+    def test_inactive_teacher_cannot_list_quiz_drafts(self):
+        res = self.client.get(
+            "/quizzes",
+            headers={"Authorization": "Bearer teacher-disabled"},
+        )
+
+        self.assertEqual(res.status_code, 403)
 
     def test_teacher_can_update_owned_draft(self):
         self.seed_quiz(include_metadata=False)
@@ -1678,6 +1853,7 @@ class TestQuizGenerationAPI(unittest.TestCase):
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(),
         )
 
         self.assertEqual(res.status_code, 200)
@@ -1686,6 +1862,14 @@ class TestQuizGenerationAPI(unittest.TestCase):
         self.assertEqual(data["published_at"], "2026-10-15T12:00:00Z")
         stored = self.database.documents["quizzes"]["quiz-1"]
         self.assertEqual(stored["status"], "published")
+        self.assertEqual(stored["title"], "Cell Energy Quiz")
+        self.assertEqual(stored["published_title"], "Published Cell Energy Quiz")
+        self.assertEqual(stored["published_description"], "Review ATP during the scheduled window.")
+        self.assertEqual(stored["target_class_id"], "class-1")
+        self.assertEqual(stored["published_grade_level"], "Grade 1")
+        self.assertEqual(stored["published_section"], "A")
+        self.assertEqual(stored["published_by"], "teacher-1")
+        self.assertEqual(stored["questions"][0]["correct_answer"], "Mitochondria")
         self.assertEqual(stored["published_at"], NOW)
         self.assertEqual(stored["updated_at"], NOW)
 
@@ -1694,12 +1878,16 @@ class TestQuizGenerationAPI(unittest.TestCase):
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer student-1"},
+            json=self.publish_payload(),
         )
         self.assertEqual(res.status_code, 403)
 
     def test_missing_authentication_cannot_publish_quiz(self):
         self.seed_quiz()
-        res = self.client.post("/quizzes/quiz-1/publish")
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            json=self.publish_payload(),
+        )
         self.assertEqual(res.status_code, 401)
 
     def test_inactive_teacher_cannot_publish_quiz(self):
@@ -1707,6 +1895,7 @@ class TestQuizGenerationAPI(unittest.TestCase):
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer teacher-disabled"},
+            json=self.publish_payload(),
         )
         self.assertEqual(res.status_code, 403)
 
@@ -1715,14 +1904,63 @@ class TestQuizGenerationAPI(unittest.TestCase):
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(),
         )
         self.assertEqual(res.status_code, 404)
+
+    def test_teacher_cannot_publish_to_an_unassigned_class(self):
+        self.seed_quiz()
+        self.database.collection("classes").documents["class-2"] = {
+            "name": "Class 102",
+            "grade_level": "Grade 1",
+            "section": "B",
+            "status": "active",
+        }
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(target_class_id="class-2"),
+        )
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"]["status"], "draft")
+
+    def test_subject_grade_mismatch_cannot_be_published(self):
+        self.seed_quiz()
+        self.database.collection("classes").documents["class-2"] = {
+            "name": "Class 201",
+            "grade_level": "Grade 2",
+            "section": "A",
+            "status": "active",
+        }
+        self.database.collection("class_teacher_assignments").documents["assign-2"] = {
+            "class_id": "class-2",
+            "subject_id": "subject-1",
+            "teacher_uid": "teacher-1",
+            "status": "active",
+        }
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(target_class_id="class-2"),
+        )
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"]["status"], "draft")
+
+    def test_invalid_target_class_document_id_is_rejected(self):
+        self.seed_quiz()
+        res = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(target_class_id="bad/class"),
+        )
+        self.assertEqual(res.status_code, 422)
 
     def test_already_published_quiz_cannot_be_published_again(self):
         self.seed_quiz(status="published")
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(),
         )
         self.assertEqual(res.status_code, 409)
 
@@ -1734,6 +1972,7 @@ class TestQuizGenerationAPI(unittest.TestCase):
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(),
         )
 
         self.assertEqual(res.status_code, 403)
@@ -1764,6 +2003,7 @@ class TestQuizGenerationAPI(unittest.TestCase):
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(),
         )
 
         self.assertEqual(res.status_code, 422)
@@ -1780,6 +2020,7 @@ class TestQuizGenerationAPI(unittest.TestCase):
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(),
         )
 
         self.assertEqual(res.status_code, 422)
@@ -1798,10 +2039,35 @@ class TestQuizGenerationAPI(unittest.TestCase):
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(opening_at="2026-10-14T09:00:00+08:00"),
         )
 
         self.assertEqual(res.status_code, 422)
         self.assertEqual(self.database.documents["quizzes"]["quiz-1"], before)
+
+    def test_publication_requires_timezone_aware_opening_and_closing_times(self):
+        self.seed_quiz()
+        naive_payload = self.publish_payload(
+            opening_at="2030-01-01T10:00:00",
+            closing_at="2030-01-02T10:00:00",
+        )
+        response = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+            json=naive_payload,
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"]["status"], "draft")
+
+        missing_payload = self.publish_payload()
+        missing_payload.pop("closing_at")
+        response = self.client.post(
+            "/quizzes/quiz-1/publish",
+            headers={"Authorization": "Bearer teacher-1"},
+            json=missing_payload,
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.database.documents["quizzes"]["quiz-1"]["status"], "draft")
 
     def test_reversed_schedule_cannot_be_published(self):
         self.seed_quiz()
@@ -1815,6 +2081,10 @@ class TestQuizGenerationAPI(unittest.TestCase):
         res = self.client.post(
             "/quizzes/quiz-1/publish",
             headers={"Authorization": "Bearer teacher-1"},
+            json=self.publish_payload(
+                opening_at="2026-10-17T09:00:00+08:00",
+                closing_at="2026-10-16T09:00:00+08:00",
+            ),
         )
 
         self.assertEqual(res.status_code, 422)
@@ -2051,6 +2321,8 @@ class TestQuizGenerationAPI(unittest.TestCase):
         self.assertEqual(data["title"], "Cell Energy Quiz")
         self.assertEqual(len(data["questions"]), 1)
         self.assertEqual(data["questions"][0]["type"], "multiple_choice")
+        self.assertEqual(data["questions"][0]["correct_answer"], "Mitochondria")
+        self.assertNotIn("correct_option_index", data["questions"][0])
         self.assertEqual(
             data["questions"][0]["evidence"]["quote"],
             "Mitochondria are membrane-bound cell organelles that generate chemical energy in the form of adenosine triphosphate (ATP) for cellular processes.",
@@ -2073,6 +2345,11 @@ class TestQuizGenerationAPI(unittest.TestCase):
         self.assertEqual(len(quizzes), 1)
         persisted_draft = list(quizzes.values())[0]
         self.assertEqual(persisted_draft["status"], "draft")
+        self.assertEqual(
+            persisted_draft["questions"][0]["correct_answer"],
+            "Mitochondria",
+        )
+        self.assertNotIn("correct_option_index", persisted_draft["questions"][0])
         self.assertEqual(persisted_draft["lesson_id"], "lesson-1")
         self.assertEqual(persisted_draft["teacher_id"], "teacher-1")
         self.assertEqual(persisted_draft["class_id"], "class-1")
@@ -2108,6 +2385,42 @@ class TestQuizGenerationAPI(unittest.TestCase):
         self.assertEqual(res.status_code, 422)
         quizzes = self.database.documents.get("quizzes", {})
         self.assertEqual(len(quizzes), 0)
+
+    def test_invalid_generated_option_index_returns_422_without_persisting(self):
+        invalid_payload = {
+            "title": "Invalid Index Quiz",
+            "topic": "Cytology",
+            "questions": [
+                {
+                    "type": "multiple_choice",
+                    "prompt": "Which organelle generates ATP?",
+                    "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+                    "correct_option_index": 4,
+                    "explanation": "Mitochondria generate ATP.",
+                    "evidence": {
+                        "evidence_id": "lesson:lesson-1:block:0",
+                    },
+                }
+            ],
+        }
+        client = SequenceMockLLMClient([invalid_payload, invalid_payload])
+        orchestrator = QuizGenerationOrchestrator(
+            generation_service=QuizGenerationService(client),
+            max_attempts=2,
+        )
+        self.app.dependency_overrides[lessons.get_quiz_orchestrator] = (
+            lambda: orchestrator
+        )
+
+        res = self.client.post(
+            "/lessons/lesson-1/generate-quiz",
+            headers={"Authorization": "Bearer teacher-1"},
+            json={"question_counts": {"multiple_choice": 1}},
+        )
+
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(client.call_count, 2)
+        self.assertEqual(self.database.documents.get("quizzes", {}), {})
 
     def test_needs_review_validation_never_persists_draft(self):
         mcq = MultipleChoiceQuestion(
@@ -2199,6 +2512,17 @@ class TestQuizResponseSchema(unittest.TestCase):
         """Each of the four question sub-schemas MUST list 'type' as required."""
         for sub in [_MC_QUESTION_SCHEMA, _TF_QUESTION_SCHEMA, _IDENT_QUESTION_SCHEMA, _ESSAY_QUESTION_SCHEMA]:
             self.assertIn("type", sub["required"], f"'type' not required in {sub}")
+
+    def test_multiple_choice_requires_bounded_integer_option_index(self):
+        properties = _MC_QUESTION_SCHEMA["properties"]
+        self.assertEqual(
+            properties["correct_option_index"],
+            {"type": "integer", "minimum": 0, "maximum": 3},
+        )
+        self.assertIn("correct_option_index", _MC_QUESTION_SCHEMA["required"])
+        self.assertNotIn("correct_answer", properties)
+        self.assertEqual(properties["options"]["minItems"], 4)
+        self.assertEqual(properties["options"]["maxItems"], 4)
 
     def test_type_enum_values_match_allowed_types(self):
         """Each sub-schema restricts 'type' to exactly its own literal value."""
@@ -2310,7 +2634,7 @@ class TestServicePassesSchema(unittest.TestCase):
                     "type": "multiple_choice",
                     "prompt": "Which organelle generates ATP?",
                     "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
-                    "correct_answer": "Mitochondria",
+                    "correct_option_index": 0,
                     "explanation": "Mitochondria generate ATP.",
                     "evidence": {
                         "evidence_id": "lesson:lesson-schema-test:block:0",
@@ -2360,7 +2684,7 @@ class TestMissingNullUnsupportedTypeRejection(unittest.TestCase):
         self.base_question = {
             "prompt": "Which organelle generates ATP?",
             "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
-            "correct_answer": "Mitochondria",
+            "correct_option_index": 0,
             "explanation": "Mitochondria generate ATP.",
             "evidence": {"quote": "Evidence text", "block_index": 0},
         }
@@ -2399,7 +2723,7 @@ class TestMissingNullUnsupportedTypeRejection(unittest.TestCase):
                 "type": "multiple_choice",
                 "prompt": "Q?",
                 "options": ["A", "B", "C", "D"],
-                "correct_answer": "A",
+                "correct_option_index": 0,
                 "explanation": "E",
                 "evidence": {"quote": "Evidence", "block_index": 0},
             },
@@ -2463,7 +2787,7 @@ class TestOrchestratorMalformedRetryAndFailure(unittest.TestCase):
                     "type": "multiple_choice",
                     "prompt": "Which organelle generates ATP?",
                     "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
-                    "correct_answer": "Mitochondria",
+                    "correct_option_index": 0,
                     "explanation": "Mitochondria generate ATP.",
                     "evidence": {
                         "evidence_id": "lesson:lesson-retry:block:0",
@@ -2480,6 +2804,22 @@ class TestOrchestratorMalformedRetryAndFailure(unittest.TestCase):
                     "prompt": "Which organelle generates ATP?",
                     "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
                     "correct_answer": "Mitochondria",
+                    "explanation": "Mitochondria generate ATP.",
+                    "evidence": {
+                        "evidence_id": "lesson:lesson-retry:block:0",
+                    },
+                }
+            ],
+        }
+        self.invalid_option_index_payload = {
+            "title": "Bad Quiz",
+            "topic": "Testing",
+            "questions": [
+                {
+                    "type": "multiple_choice",
+                    "prompt": "Which organelle generates ATP?",
+                    "options": ["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+                    "correct_option_index": 4,
                     "explanation": "Mitochondria generate ATP.",
                     "evidence": {
                         "evidence_id": "lesson:lesson-retry:block:0",
@@ -2508,6 +2848,25 @@ class TestOrchestratorMalformedRetryAndFailure(unittest.TestCase):
         self.assertEqual(len(result.quiz.questions), 1)
         self.assertEqual(result.quiz.questions[0].type, "multiple_choice")
 
+    def test_recovery_when_first_option_index_invalid_second_valid(self):
+        mock_client = SequenceMockLLMClient(
+            [self.invalid_option_index_payload, self.valid_payload]
+        )
+        service = QuizGenerationService(llm_client=mock_client)
+        orchestrator = QuizGenerationOrchestrator(
+            generation_service=service, max_attempts=2
+        )
+
+        result = orchestrator.orchestrate_generation(self.lesson, self.request)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.attempts, 2)
+        self.assertEqual(mock_client.call_count, 2)
+        self.assertEqual(
+            result.quiz.questions[0].correct_answer,
+            "Mitochondria",
+        )
+
     def test_failure_after_repeated_malformed_no_draft(self):
         """Both attempts have missing type -> clean failure, quiz is None."""
         mock_client = SequenceMockLLMClient([
@@ -2526,6 +2885,23 @@ class TestOrchestratorMalformedRetryAndFailure(unittest.TestCase):
         self.assertEqual(result.attempts, 2)
         self.assertEqual(mock_client.call_count, 2)
         self.assertIn("unsupported type", result.error_message.lower())
+
+    def test_repeated_invalid_option_indexes_exhaust_retries(self):
+        mock_client = SequenceMockLLMClient(
+            [self.invalid_option_index_payload, self.invalid_option_index_payload]
+        )
+        service = QuizGenerationService(llm_client=mock_client)
+        orchestrator = QuizGenerationOrchestrator(
+            generation_service=service, max_attempts=2
+        )
+
+        result = orchestrator.orchestrate_generation(self.lesson, self.request)
+
+        self.assertFalse(result.success)
+        self.assertIsNone(result.quiz)
+        self.assertEqual(result.attempts, 2)
+        self.assertEqual(mock_client.call_count, 2)
+        self.assertIn("correct_option_index", result.error_message)
 
     def test_failure_after_repeated_malformed_raises_when_requested(self):
         """With raise_on_failure=True, repeated malformed raises MaxAttemptsExceededError."""
@@ -2628,7 +3004,7 @@ class TestValidationDiagnostics(unittest.TestCase):
                     "type": "multiple_choice",
                     "prompt": "What color is the sky?",
                     "options": ["SecretAnswer", "B", "C", "D"],
-                    "correct_answer": "SecretAnswer",
+                    "correct_option_index": 0,
                     "explanation": "Explanation text.",
                     "evidence": {
                         "evidence_id": "lesson:lesson-diag:block:0",
@@ -2702,4 +3078,3 @@ class TestQuizGenerationAPIDiagnostics(TestQuizGenerationAPI):
         )
 if __name__ == "__main__":
     unittest.main()
-

@@ -91,6 +91,90 @@
   text-align: right;
 }
 
+.page-student-quizzes .student-quiz-status {
+  display: inline-flex;
+  margin: 14px 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #edf0f4;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.page-student-quizzes .status-open {
+  background: #e7f6ec;
+  color: #176b36;
+}
+
+.page-student-quizzes .status-scheduled {
+  background: #fff4d6;
+  color: #775600;
+}
+
+.page-student-quizzes .status-closed,
+.page-student-quizzes .status-answered {
+  background: #edf0f4;
+  color: #475467;
+}
+
+.page-student-quizzes .student-quiz-taking {
+  margin: 22px;
+  padding: 22px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.page-student-quizzes .student-quiz-taking header {
+  margin-bottom: 20px;
+}
+
+.page-student-quizzes .student-quiz-taking header p,
+.page-student-quizzes .student-quiz-class {
+  margin-top: 6px;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.page-student-quizzes .student-quiz-question {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+}
+
+.page-student-quizzes .student-quiz-question legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+.page-student-quizzes .student-quiz-question label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.page-student-quizzes .student-quiz-question textarea,
+.page-student-quizzes .student-quiz-question select,
+.page-student-quizzes .student-quiz-question > input {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 11px;
+  border: 1px solid var(--color-control-border);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.page-student-quizzes .student-quiz-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+
 @media (max-width: 700px) {
   .page-student-quizzes .student-quiz-list {
     grid-template-columns: 1fr;
@@ -105,5 +189,10 @@
 
   .page-student-quizzes .student-quiz-availability dd {
     text-align: left;
+  }
+
+  .page-student-quizzes .student-quiz-taking {
+    margin: 16px;
+    padding: 16px;
   }
 }

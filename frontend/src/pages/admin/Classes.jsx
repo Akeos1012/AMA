@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   auth,
   getIdTokenResult,
@@ -98,6 +104,8 @@ export default function Classes() {
   const [classesLoading, setClassesLoading] = useState(true);
   const [classesError, setClassesError] = useState("");
   const [accounts, setAccounts] = useState([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [accountsError, setAccountsError] = useState("");
   const [teachers, setTeachers] = useState([]);
   const [teachersLoading, setTeachersLoading] = useState(true);
   const [teachersError, setTeachersError] = useState("");
@@ -127,6 +135,8 @@ export default function Classes() {
   const [isSavingClass, setIsSavingClass] = useState(false);
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
   const [studentMutationUid, setStudentMutationUid] = useState("");
+  const [isAssigningStudents, setIsAssigningStudents] = useState(false);
+  const assignmentInProgress = useRef(false);
   const [isDeactivatingClass, setIsDeactivatingClass] = useState(false);
   const [assignmentSyncClassId, setAssignmentSyncClassId] = useState("");
 
@@ -153,6 +163,8 @@ export default function Classes() {
   }, []);
 
   const loadTeachers = useCallback(async (user) => {
+    setAccountsLoading(true);
+    setAccountsError("");
     setTeachersLoading(true);
     setTeachersError("");
 
@@ -183,11 +195,14 @@ export default function Classes() {
       return users;
     } catch (error) {
       console.error("Could not load class teacher accounts:", error);
+      setAccounts([]);
+      setAccountsError("Unable to load student accounts. Please try again.");
       setTeachersError(
         "Unable to load teacher accounts. Please try again.",
       );
       return [];
     } finally {
+      setAccountsLoading(false);
       setTeachersLoading(false);
     }
   }, []);
@@ -213,10 +228,12 @@ export default function Classes() {
         }),
       );
       setClasses(classData);
+      return true;
     } catch (error) {
       console.error("Could not load classes:", error);
       setClassesError(error.message || "Unable to load classes. Please retry.");
       setClasses([]);
+      return false;
     } finally {
       setClassesLoading(false);
     }
@@ -290,6 +307,38 @@ export default function Classes() {
     classes.find((schoolClass) => schoolClass.id === selectedClassId) ?? null;
   const studentsClass =
     classes.find((schoolClass) => schoolClass.id === studentsClassId) ?? null;
+  const activeMembershipUids = useMemo(
+    () =>
+      new Set(
+        classes.flatMap((schoolClass) =>
+          schoolClass.students.map((student) => student.uid),
+        ),
+      ),
+    [classes],
+  );
+  const availableStudents = useMemo(
+    () =>
+      accounts
+        .filter(
+          (account) =>
+            account.role === "student" &&
+            !account.disabled &&
+            account.profile_status === "active" &&
+            account.grade_level === studentsClass?.gradeLevel &&
+            !activeMembershipUids.has(account.uid),
+        )
+        .map((account) => ({
+          uid: account.uid,
+          name:
+            account.display_name ||
+            account.name ||
+            account.email ||
+            account.uid,
+          studentId: account.student_id || "",
+          email: account.email || "",
+        })),
+    [accounts, activeMembershipUids, studentsClass],
+  );
   const visibleStudents = (studentsClass?.students ?? []).filter((student) => {
     const normalizedSearch = studentSearch.trim().toLowerCase();
     return (
@@ -462,6 +511,81 @@ export default function Classes() {
     setStudentSearch("");
     setCsvPreview(null);
     setCsvErrors([]);
+  }
+
+  async function assignStudents(studentUids) {
+    if (
+      !studentsClass ||
+      studentsClass.status !== "Active" ||
+      assignmentInProgress.current ||
+      !studentUids.length
+    ) {
+      return { succeededUids: [] };
+    }
+
+    assignmentInProgress.current = true;
+    setIsAssigningStudents(true);
+    setPageError("");
+    setPageMessage("");
+    try {
+      const results = await Promise.all(
+        studentUids.map(async (studentUid) => {
+          try {
+            await requestJson(
+              auth.currentUser,
+              `${CLASSES_ENDPOINT}/${encodeURIComponent(studentsClass.id)}/memberships`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  class_id: studentsClass.id,
+                  student_uid: studentUid,
+                  status: "active",
+                }),
+              },
+            );
+            return { studentUid, error: null };
+          } catch (error) {
+            console.error(`Could not assign student ${studentUid}:`, error);
+            return {
+              studentUid,
+              error: error.message || "Unable to assign this student.",
+            };
+          }
+        }),
+      );
+
+      const succeeded = results.filter((result) => !result.error);
+      const failed = results.filter((result) => result.error);
+      const refreshed = await loadClasses(auth.currentUser, accounts);
+      const studentNames = new Map(
+        availableStudents.map((student) => [student.uid, student.name]),
+      );
+      if (succeeded.length) {
+        setPageMessage(
+          `Assigned ${succeeded.length} of ${studentUids.length} selected student${studentUids.length === 1 ? "" : "s"} to ${studentsClass.gradeLevel} - ${studentsClass.section}.`,
+        );
+      }
+      if (failed.length) {
+        setPageError(
+          `Could not assign ${failed
+            .map(
+              (result) =>
+                `${studentNames.get(result.studentUid) || result.studentUid}: ${result.error}`,
+            )
+            .join("; ")}`,
+        );
+      } else if (succeeded.length && !refreshed) {
+        setPageError(
+          "Assignments were saved, but the class roster could not be refreshed.",
+        );
+      }
+
+      return { succeededUids: succeeded.map((result) => result.studentUid) };
+    } finally {
+      assignmentInProgress.current = false;
+      setIsAssigningStudents(false);
+    }
   }
 
   async function handleCsvFile(event) {
@@ -1276,11 +1400,19 @@ export default function Classes() {
       <ClassStudentsDialog
         studentsClass={studentsClass}
         visibleStudents={visibleStudents}
+        availableStudents={availableStudents}
+        accountsLoading={accountsLoading}
+        accountsError={accountsError}
+        isAssigningStudents={isAssigningStudents}
         studentSearch={studentSearch}
         onStudentSearchChange={(event) => setStudentSearch(event.target.value)}
         onClose={() => setStudentsClassId("")}
         onCsvFile={handleCsvFile}
         onRemoveStudent={removeStudent}
+        onAssignStudents={assignStudents}
+        onRetryAccounts={() => {
+          if (auth.currentUser) loadTeachers(auth.currentUser);
+        }}
         studentMutationUid={studentMutationUid}
         csvPreview={csvPreview}
         csvErrors={csvErrors}

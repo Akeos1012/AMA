@@ -110,6 +110,9 @@ class FakeDatabase:
 
 
 class FakeTransaction:
+    def get(self, query):
+        return query.stream()
+
     def create(self, document_reference, data):
         document_reference.create(data)
 
@@ -141,6 +144,11 @@ class AdminClassApiTests(unittest.TestCase):
                 disabled=False,
                 custom_claims={"role": "student"},
             ),
+            "student-3": SimpleNamespace(
+                uid="student-3",
+                disabled=False,
+                custom_claims={"role": "student"},
+            ),
         }
         self.database.collection("users").documents.update(
             {
@@ -158,11 +166,19 @@ class AdminClassApiTests(unittest.TestCase):
                     "uid": "student-1",
                     "role": "student",
                     "status": "active",
+                    "grade_level": "Grade 1",
                 },
                 "student-2": {
                     "uid": "student-2",
                     "role": "student",
                     "status": "active",
+                    "grade_level": "Grade 2",
+                },
+                "student-3": {
+                    "uid": "student-3",
+                    "role": "student",
+                    "status": "active",
+                    "grade_level": "Grade 2",
                 },
             }
         )
@@ -204,6 +220,7 @@ class AdminClassApiTests(unittest.TestCase):
             "teacher-2": "teacher",
             "student-1": "student",
             "student-2": "student",
+            "student-3": "student",
         }
         if token not in roles:
             raise HTTPException(status_code=401, detail="Missing bearer token")
@@ -221,10 +238,15 @@ class AdminClassApiTests(unittest.TestCase):
                 "user not found", uid
             ) from None
 
-    def add_class(self, class_id="class-1", status="active"):
+    def add_class(
+        self,
+        class_id="class-1",
+        status="active",
+        grade_level="Grade 1",
+    ):
         data = {
-            "name": "Grade 1 - Mabini",
-            "grade_level": "Grade 1",
+            "name": f"{grade_level} - Mabini",
+            "grade_level": grade_level,
             "section": "Mabini",
             "status": status,
             "lead_teacher_uid": None,
@@ -289,6 +311,11 @@ class AdminClassApiTests(unittest.TestCase):
                 },
             }
         )
+        self.database.collection("class_memberships").documents["membership-1"] = {
+            "class_id": "class-1",
+            "student_uid": "student-1",
+            "status": "active",
+        }
 
         teacher_response = self.client.get(
             "/api/teacher/classes",
@@ -299,6 +326,13 @@ class AdminClassApiTests(unittest.TestCase):
             [school_class["id"] for school_class in teacher_response.json()],
             ["class-1"],
         )
+        minimal_response = self.client.get(
+            "/api/teacher/classes?include_students=false",
+            headers=self.headers("teacher-1"),
+        )
+        self.assertEqual(minimal_response.status_code, 200)
+        self.assertEqual(minimal_response.json()[0]["student_count"], 1)
+        self.assertEqual(minimal_response.json()[0]["students"], [])
 
         unauthenticated_response = self.client.get("/api/teacher/classes")
         self.assertEqual(unauthenticated_response.status_code, 401)
@@ -470,8 +504,8 @@ class AdminClassApiTests(unittest.TestCase):
 
         for class_id, student_uid in (
             ("class-rizal", "student-1"),
-            ("class-grade-2", "student-1"),
             ("class-grade-2", "student-2"),
+            ("class-grade-2", "student-3"),
         ):
             membership_response = self.client.post(
                 f"/api/admin/classes/{class_id}/memberships",
@@ -817,6 +851,9 @@ class AdminClassApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(active_membership.status_code, 200)
+        self.database.collection("users").documents["student-2"][
+            "grade_level"
+        ] = "Grade 1"
         inactive_membership = self.client.post(
             f"/api/admin/classes/{class_id}/memberships",
             headers=self.headers("admin-1"),
@@ -1214,6 +1251,17 @@ class AdminClassApiTests(unittest.TestCase):
             1,
         )
 
+    def test_membership_allows_an_eligible_student(self):
+        self.add_class()
+        request = class_models.StudentMembershipCreateRequest.model_validate(
+            {"class_id": "class-1", "student_uid": "student-1"}
+        )
+
+        membership = admin_classes.create_membership("class-1", request)
+
+        self.assertEqual(membership.status, "active")
+        self.assertEqual(membership.student_uid, "student-1")
+
     def test_membership_can_be_reactivated_without_creating_a_duplicate(self):
         self.add_class()
         request = class_models.StudentMembershipCreateRequest.model_validate(
@@ -1231,15 +1279,108 @@ class AdminClassApiTests(unittest.TestCase):
             1,
         )
 
-    def test_membership_rejects_wrong_role_and_inactive_class(self):
+    def test_membership_rejects_non_student_account(self):
         self.add_class()
         request = class_models.StudentMembershipCreateRequest.model_validate(
             {"class_id": "class-1", "student_uid": "teacher-1"}
         )
         with self.assertRaises(HTTPException) as wrong_role:
             admin_classes.create_membership("class-1", request)
-        self.assertEqual(wrong_role.exception.status_code, 422)
+        self.assertEqual(wrong_role.exception.status_code, 403)
 
+    def test_membership_uses_firebase_claim_role(self):
+        self.add_class()
+        self.accounts["student-1"].custom_claims = {"role": "teacher"}
+        request = class_models.StudentMembershipCreateRequest.model_validate(
+            {"class_id": "class-1", "student_uid": "student-1"}
+        )
+
+        with self.assertRaises(HTTPException) as role_mismatch:
+            admin_classes.create_membership("class-1", request)
+        self.assertEqual(role_mismatch.exception.status_code, 403)
+
+    def test_membership_rejects_disabled_account(self):
+        self.add_class()
+        self.accounts["student-1"].disabled = True
+        request = class_models.StudentMembershipCreateRequest.model_validate(
+            {"class_id": "class-1", "student_uid": "student-1"}
+        )
+        with self.assertRaises(HTTPException) as disabled_account:
+            admin_classes.create_membership("class-1", request)
+        self.assertEqual(disabled_account.exception.status_code, 403)
+
+    def test_membership_rejects_inactive_student_profile(self):
+        self.add_class()
+        self.database.collection("users").documents["student-1"]["status"] = "inactive"
+        request = class_models.StudentMembershipCreateRequest.model_validate(
+            {"class_id": "class-1", "student_uid": "student-1"}
+        )
+        with self.assertRaises(HTTPException) as inactive_profile:
+            admin_classes.create_membership("class-1", request)
+        self.assertEqual(inactive_profile.exception.status_code, 403)
+
+    def test_membership_rejects_student_registered_for_another_grade(self):
+        self.add_class()
+        self.database.collection("users").documents["student-1"][
+            "grade_level"
+        ] = "Grade 2"
+        request = class_models.StudentMembershipCreateRequest.model_validate(
+            {"class_id": "class-1", "student_uid": "student-1"}
+        )
+        with self.assertRaises(HTTPException) as wrong_grade:
+            admin_classes.create_membership("class-1", request)
+        self.assertEqual(wrong_grade.exception.status_code, 403)
+
+    def test_membership_rejects_another_active_class_membership(self):
+        self.add_class("class-1")
+        self.add_class("class-2")
+        first_request = class_models.StudentMembershipCreateRequest.model_validate(
+            {"class_id": "class-1", "student_uid": "student-1"}
+        )
+        second_request = class_models.StudentMembershipCreateRequest.model_validate(
+            {"class_id": "class-2", "student_uid": "student-1"}
+        )
+        admin_classes.create_membership("class-1", first_request)
+
+        with self.assertRaises(HTTPException) as conflict:
+            admin_classes.create_membership("class-2", second_request)
+        self.assertEqual(conflict.exception.status_code, 409)
+
+    def test_active_membership_in_same_class_remains_idempotent(self):
+        self.add_class("class-1")
+        self.add_class("class-2")
+        request = class_models.StudentMembershipCreateRequest.model_validate(
+            {"class_id": "class-1", "student_uid": "student-1"}
+        )
+        membership = admin_classes.create_membership("class-1", request)
+        self.database.collection("class_memberships").documents["legacy-membership"] = {
+            "class_id": "class-2",
+            "student_uid": "student-1",
+            "status": "active",
+        }
+
+        repeated = admin_classes.create_membership("class-1", request)
+
+        self.assertEqual(repeated.id, membership.id)
+        self.assertEqual(repeated.status, "active")
+
+    def test_inactive_membership_in_another_class_does_not_prevent_assignment(self):
+        self.add_class("class-1")
+        self.add_class("class-2")
+        self.database.collection("class_memberships").documents["old-membership"] = {
+            "class_id": "class-1",
+            "student_uid": "student-1",
+            "status": "inactive",
+        }
+        request = class_models.StudentMembershipCreateRequest.model_validate(
+            {"class_id": "class-2", "student_uid": "student-1"}
+        )
+
+        membership = admin_classes.create_membership("class-2", request)
+
+        self.assertEqual(membership.status, "active")
+
+    def test_membership_rejects_assignment_to_inactive_class(self):
         self.add_class(status="inactive")
         request = class_models.StudentMembershipCreateRequest.model_validate(
             {"class_id": "class-1", "student_uid": "student-1"}

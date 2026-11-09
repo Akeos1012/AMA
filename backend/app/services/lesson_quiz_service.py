@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -16,10 +16,16 @@ from app.models.generation import (
     GeneratedQuiz,
     QuizDraft,
     QuizDraftUpdateRequest,
+    PublishQuizRequest,
     QuizGenerationRequest,
 )
 from app.services.lesson_service import aware_datetime, lesson_snapshot
-from app.services.lesson_access_service import require_teacher_lesson_access
+from app.services.lesson_access_service import (
+    require_active_class,
+    require_active_subject,
+    require_teacher_lesson_access,
+    teacher_can_manage_lesson,
+)
 from app.services.quiz_generation_orchestrator import QuizGenerationOrchestrator
 from app.services.quiz_generation_service import QuizGenerationServiceError
 from app.validation.lesson_validation import validate_document_id
@@ -30,6 +36,31 @@ from app.validation.quiz_validator import QuizValidator
 logger = logging.getLogger("app.api.lessons")
 
 QUIZ_COLLECTION = "quizzes"
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _publication_status(data: dict[str, Any], current_time: datetime) -> str:
+    opening_at = data.get("opening_at")
+    closing_at = data.get("closing_at")
+    if (
+        not isinstance(opening_at, datetime)
+        or opening_at.tzinfo is None
+        or opening_at.utcoffset() is None
+        or not isinstance(closing_at, datetime)
+        or closing_at.tzinfo is None
+        or closing_at.utcoffset() is None
+    ):
+        return "closed"
+    if opening_at >= closing_at:
+        return "closed"
+    if current_time < opening_at:
+        return "scheduled"
+    if current_time >= closing_at:
+        return "closed"
+    return "open"
 
 
 def quiz_draft_response(quiz_id: str, data: dict[str, Any]) -> QuizDraft:
@@ -174,6 +205,48 @@ def generate_quiz_for_lesson(
     return quiz_draft_response(quiz_ref.id, saved_doc.to_dict() or {})
 
 
+def list_quiz_drafts(
+    database: Any,
+    teacher_uid: str,
+) -> list[QuizDraft]:
+    quizzes = (
+        database.collection(QUIZ_COLLECTION)
+        .where("teacher_id", "==", teacher_uid)
+        .where("status", "==", "draft")
+        .stream()
+    )
+    return [
+        quiz_draft_response(quiz.id, quiz.to_dict() or {})
+        for quiz in quizzes
+    ]
+
+
+def list_published_quizzes(
+    database: Any,
+    teacher_uid: str,
+) -> list[QuizDraft]:
+    quizzes = (
+        database.collection(QUIZ_COLLECTION)
+        .where("teacher_id", "==", teacher_uid)
+        .where("status", "==", "published")
+        .stream()
+    )
+    current_time = utc_now()
+    return [
+        quiz_draft_response(
+            quiz.id,
+            (quiz.to_dict() or {})
+            | {
+                "availability_status": _publication_status(
+                    quiz.to_dict() or {},
+                    current_time,
+                )
+            },
+        )
+        for quiz in quizzes
+    ]
+
+
 def update_quiz_draft(
     database: Any,
     quiz_id: str,
@@ -272,9 +345,11 @@ def publish_quiz(
     database: Any,
     quiz_id: str,
     teacher_uid: str,
+    request: PublishQuizRequest,
 ) -> QuizDraft:
-    """Publish an owned draft after rechecking authorization and validation."""
+    """Publish an owned draft to an authorized class with a future schedule."""
     quiz_id = validate_document_id(quiz_id, "quiz ID")
+    target_class_id = validate_document_id(request.target_class_id, "class ID")
     quiz_ref = database.collection(QUIZ_COLLECTION).document(quiz_id)
     snapshot = quiz_ref.get()
     if not snapshot.exists:
@@ -289,25 +364,10 @@ def publish_quiz(
             detail="Only quiz drafts can be published.",
         )
 
-    opening_at = current.get("opening_at")
-    closing_at = current.get("closing_at")
-    for field_name, value in (
-        ("opening_at", opening_at),
-        ("closing_at", closing_at),
-    ):
-        if value is not None and (
-            not isinstance(value, datetime)
-            or value.tzinfo is None
-            or value.utcoffset() is None
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"{field_name} must be a timezone-aware datetime.",
-            )
-    if opening_at is not None and closing_at is not None and opening_at >= closing_at:
+    if request.opening_at <= utc_now():
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Opening time must be earlier than closing time.",
+            detail="Opening time must be in the future.",
         )
 
     try:
@@ -319,6 +379,38 @@ def publish_quiz(
         ):
             raise HTTPException(status_code=404, detail="Quiz draft not found.")
         require_teacher_lesson_access(database, teacher_uid, lesson_data)
+        target_class = require_active_class(database, target_class_id)
+        target_subject = require_active_subject(database, current["subject_id"])
+        if (
+            target_class is None
+            or target_subject is None
+            or not teacher_can_manage_lesson(
+                database,
+                teacher_uid,
+                target_class_id,
+                current["subject_id"],
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to publish to the selected class.",
+            )
+        if not isinstance(target_class.get("grade_level"), str) or not isinstance(
+            target_class.get("section"), str
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The selected class has invalid grade or section data.",
+            )
+        grade_levels = target_subject.get("grade_levels", [])
+        if (
+            not isinstance(grade_levels, (list, tuple))
+            or target_class.get("grade_level") not in grade_levels
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The subject is not available for the selected class's grade level.",
+            )
         extracted_lesson = extract_lesson_text(lesson_data)
         quiz = GeneratedQuiz(
             title=current["title"],
@@ -343,6 +435,14 @@ def publish_quiz(
         quiz_ref.update(
             {
                 "status": "published",
+                "published_title": request.title,
+                "published_description": request.description,
+                "target_class_id": target_class_id,
+                "published_grade_level": target_class["grade_level"],
+                "published_section": target_class["section"],
+                "opening_at": request.opening_at,
+                "closing_at": request.closing_at,
+                "published_by": teacher_uid,
                 "published_at": SERVER_TIMESTAMP,
                 "updated_at": SERVER_TIMESTAMP,
             }

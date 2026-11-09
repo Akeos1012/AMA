@@ -114,6 +114,34 @@ def validate_account(database, uid: str, expected_role: str) -> dict[str, Any]:
     return profile
 
 
+def validate_student_membership_eligibility(
+    database,
+    uid: str,
+    grade_level: str,
+) -> dict[str, Any]:
+    validate_document_id(uid, "account ID")
+    try:
+        account = firebase_auth.get_user(uid)
+    except firebase_auth.UserNotFoundError:
+        raise HTTPException(status_code=404, detail="User account not found.") from None
+
+    profile_snapshot = database.collection(USER_COLLECTION).document(uid).get()
+    profile = document_data(profile_snapshot, "User account")
+    claims = account.custom_claims or {}
+    if (
+        account.disabled
+        or claims.get("role") != "student"
+        or profile.get("role") != "student"
+        or profile.get("status") != "active"
+        or profile.get("grade_level") != grade_level
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="An active student account registered for this grade is required.",
+        )
+    return profile
+
+
 def require_active_class(database, class_id: str) -> dict[str, Any]:
     validate_document_id(class_id, "class ID")
     snapshot = database.collection(CLASS_COLLECTION).document(class_id).get()
@@ -200,6 +228,7 @@ def validate_subject_class(subject: dict[str, Any], grade_level: str) -> None:
 @teacher_router.get("/teacher/classes")
 def list_teacher_classes(
     decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+    include_students: bool = True,
 ) -> list[dict[str, Any]]:
     teacher_uid = decoded_token.get("uid")
     if decoded_token.get("role") != "teacher":
@@ -292,6 +321,7 @@ def list_teacher_classes(
         ]
         students: list[dict[str, Any]] = []
         seen_student_uids: set[str] = set()
+        active_student_uids: set[str] = set()
         for membership in membership_records:
             if membership.get("status") != "active":
                 continue
@@ -303,6 +333,9 @@ def list_teacher_classes(
             ):
                 continue
             seen_student_uids.add(student_uid)
+            active_student_uids.add(student_uid)
+            if not include_students:
+                continue
             profile_snapshot = database.collection(USER_COLLECTION).document(student_uid).get()
             profile = profile_snapshot.to_dict() or {}
             students.append(
@@ -323,7 +356,7 @@ def list_teacher_classes(
                 "status": class_data.get("status", "active"),
                 "lead_teacher_uid": class_data.get("lead_teacher_uid"),
                 "is_adviser": class_data.get("lead_teacher_uid") == teacher_uid,
-                "student_count": len(students),
+                "student_count": len(active_student_uids),
                 "students": students,
                 "assigned_subjects": subject_entries,
             }
@@ -671,8 +704,12 @@ def create_membership(
             detail="The membership class_id must match the requested class.",
         )
     database = get_database()
-    require_active_class(database, class_id)
-    validate_account(database, data.student_uid, "student")
+    class_data = require_active_class(database, class_id)
+    validate_student_membership_eligibility(
+        database,
+        data.student_uid,
+        class_data.get("grade_level"),
+    )
 
     membership_id = relationship_document_id(
         "mem",
@@ -697,15 +734,41 @@ def create_membership(
                 profile_ref.get(transaction=transaction),
                 "User account",
             )
-            if profile.get("role") != "student" or profile.get("status") != "active":
+            if (
+                profile.get("role") != "student"
+                or profile.get("status") != "active"
+                or profile.get("grade_level") != class_data.get("grade_level")
+            ):
                 raise HTTPException(
-                    status_code=422,
-                    detail="An active student account is required.",
+                    status_code=403,
+                    detail="An active student account registered for this grade is required.",
                 )
 
             existing_snapshot = membership_ref.get(transaction=transaction)
+            existing_data = (
+                existing_snapshot.to_dict() or {} if existing_snapshot.exists else {}
+            )
+            if existing_data.get("status") == "active":
+                return
+
+            if data.status == "active":
+                memberships_query = database.collection(MEMBERSHIP_COLLECTION).where(
+                    "student_uid",
+                    "==",
+                    data.student_uid,
+                )
+                active_memberships = transaction.get(memberships_query)
+                if any(
+                    (membership.to_dict() or {}).get("status") == "active"
+                    and (membership.to_dict() or {}).get("class_id") != class_id
+                    for membership in active_memberships
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="The student already has an active membership in another class.",
+                    )
+
             if existing_snapshot.exists:
-                existing_data = existing_snapshot.to_dict() or {}
                 if existing_data.get("status") == data.status:
                     return
                 transaction.update(

@@ -21,6 +21,7 @@ from app.models.generation import (
     GenerateQuizRequestBody,
     QuizDraft,
     QuizDraftUpdateRequest,
+    PublishQuizRequest,
 )
 from app.models.lesson import (
     LessonCreateRequest,
@@ -63,6 +64,8 @@ from app.services.quiz_generation_service import (
 )
 from app.services.lesson_quiz_service import (
     generate_quiz_for_lesson as generate_quiz_for_lesson_service,
+    list_quiz_drafts as list_quiz_drafts_service,
+    list_published_quizzes as list_published_quizzes_service,
     publish_quiz as publish_quiz_service,
     quiz_draft_response,
     update_quiz_draft as update_quiz_draft_service,
@@ -318,6 +321,26 @@ def generate_quiz_for_lesson(
     )
 
 
+@router.get("/quizzes", response_model=list[QuizDraft])
+def list_quiz_drafts(
+    decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+) -> list[QuizDraft]:
+    teacher_uid = require_role(decoded_token, "teacher")
+    database = get_database()
+    validate_active_account(database, teacher_uid, "teacher")
+    return list_quiz_drafts_service(database, teacher_uid)
+
+
+@router.get("/quizzes/published", response_model=list[QuizDraft])
+def list_published_quizzes(
+    decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+) -> list[QuizDraft]:
+    teacher_uid = require_role(decoded_token, "teacher")
+    database = get_database()
+    validate_active_account(database, teacher_uid, "teacher")
+    return list_published_quizzes_service(database, teacher_uid)
+
+
 @router.patch("/quizzes/{quiz_id}", response_model=QuizDraft)
 def update_quiz_draft(
     quiz_id: str,
@@ -333,9 +356,10 @@ def update_quiz_draft(
 @router.post("/quizzes/{quiz_id}/publish", response_model=QuizDraft)
 def publish_quiz(
     quiz_id: str,
+    body: PublishQuizRequest,
     decoded_token: dict[str, Any] = Depends(verify_firebase_token),
 ) -> QuizDraft:
     teacher_uid = require_role(decoded_token, "teacher")
     database = get_database()
     validate_active_account(database, teacher_uid, "teacher")
-    return publish_quiz_service(database, quiz_id, teacher_uid)
+    return publish_quiz_service(database, quiz_id, teacher_uid, body)

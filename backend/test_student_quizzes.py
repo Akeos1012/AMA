@@ -133,6 +133,8 @@ class StudentQuizApiTests(unittest.TestCase):
         response = self.client.get("/api/student/quizzes", headers=self.headers())
         self.assertEqual(response.status_code, 200)
         self.assertEqual([quiz["id"] for quiz in response.json()], ["quiz-published"])
+        self.assertEqual(response.json()[0]["status"], "open")
+        self.assertNotIn("questions", response.json()[0])
 
     def test_drafts_and_other_classes_are_excluded(self):
         response = self.client.get("/api/student/quizzes", headers=self.headers())
@@ -155,6 +157,34 @@ class StudentQuizApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 404)
 
+    def test_published_target_class_controls_student_access(self):
+        self.database.documents["quizzes"]["quiz-published"]["target_class_id"] = "class-2"
+        self.database.documents["class_teacher_assignments"]["assignment-2"] = {
+            "class_id": "class-2",
+            "subject_id": "subject-1",
+            "teacher_uid": "teacher-1",
+            "status": "active",
+        }
+        response_for_original_class = self.client.get(
+            "/api/student/quizzes",
+            headers=self.headers("student-1"),
+        )
+        self.assertEqual(response_for_original_class.json(), [])
+
+        response_for_target_class = self.client.get(
+            "/api/student/quizzes",
+            headers=self.headers("student-2"),
+        )
+        self.assertIn(
+            "quiz-published",
+            [item["id"] for item in response_for_target_class.json()],
+        )
+        detail = self.client.get(
+            "/api/student/quizzes/quiz-published",
+            headers=self.headers("student-2"),
+        )
+        self.assertEqual(detail.status_code, 200)
+
     def test_restricted_fields_are_not_returned(self):
         response = self.client.get(
             "/api/student/quizzes/quiz-published",
@@ -164,7 +194,8 @@ class StudentQuizApiTests(unittest.TestCase):
         payload = response.json()
         restricted = {
             "correct_answer", "accepted_alternatives", "explanation", "evidence",
-            "rubric", "sample_solution", "validation_report", "teacher_id", "model_id",
+            "correct_option_index", "rubric", "sample_solution", "validation_report",
+            "teacher_id", "model_id",
         }
         self.assertTrue(restricted.isdisjoint(payload))
         for question in payload["questions"]:
@@ -195,7 +226,7 @@ class StudentQuizApiTests(unittest.TestCase):
         self.assertEqual(response.json(), [])
 
     @patch("app.services.student_quiz_service.utc_now")
-    def test_opening_and_closing_windows_are_enforced(self, mock_now):
+    def test_scheduled_and_closed_quizzes_are_listed_but_not_openable(self, mock_now):
         mock_now.return_value = NOW
         self.database.documents["quizzes"]["quiz-published"].update(
             {
@@ -204,11 +235,134 @@ class StudentQuizApiTests(unittest.TestCase):
             }
         )
         before = self.client.get("/api/student/quizzes", headers=self.headers())
-        self.assertEqual(before.json(), [])
+        self.assertEqual(before.json()[0]["status"], "scheduled")
+        before_detail = self.client.get(
+            "/api/student/quizzes/quiz-published",
+            headers=self.headers(),
+        )
+        self.assertEqual(before_detail.status_code, 404)
 
         mock_now.return_value = NOW + timedelta(hours=3)
         after = self.client.get("/api/student/quizzes", headers=self.headers())
-        self.assertEqual(after.json(), [])
+        self.assertEqual(after.json()[0]["status"], "closed")
+        after_detail = self.client.get(
+            "/api/student/quizzes/quiz-published",
+            headers=self.headers(),
+        )
+        self.assertEqual(after_detail.status_code, 404)
+
+    @patch("app.services.student_quiz_service.utc_now")
+    def test_student_can_open_quiz_only_during_availability_window(self, mock_now):
+        mock_now.return_value = NOW
+        self.database.documents["quizzes"]["quiz-published"].update(
+            {
+                "opening_at": NOW,
+                "closing_at": NOW + timedelta(hours=1),
+                "published_title": "Scheduled publication title",
+                "published_description": "Published copy",
+                "published_grade_level": "Grade 1",
+                "published_section": "A",
+            }
+        )
+
+        response = self.client.get(
+            "/api/student/quizzes/quiz-published",
+            headers=self.headers(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["title"], "Scheduled publication title")
+        self.assertEqual(response.json()["grade_level"], "Grade 1")
+        self.assertEqual(
+            response.json()["questions"][0]["prompt"],
+            "Which organelle generates ATP?",
+        )
+        self.assertNotIn("correct_answer", response.json()["questions"][0])
+
+    @patch("app.services.student_quiz_service.utc_now")
+    def test_student_submission_is_one_time_and_marks_quiz_answered(self, mock_now):
+        mock_now.return_value = NOW
+        answers = {
+            "answers": [
+                {"question_id": 0, "answer": "Mitochondria"},
+                {"question_id": 1, "answer": "Cellular energy is stored in ATP."},
+            ]
+        }
+        submitted = self.client.post(
+            "/api/student/quizzes/quiz-published/submit",
+            headers=self.headers(),
+            json=answers,
+        )
+        self.assertEqual(submitted.status_code, 200)
+        self.assertEqual(submitted.json(), {"id": "quiz-published", "status": "answered"})
+
+        listed = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(listed.json()[0]["status"], "answered")
+        self.assertEqual(
+            self.client.get(
+                "/api/student/quizzes/quiz-published",
+                headers=self.headers(),
+            ).status_code,
+            404,
+        )
+        duplicate = self.client.post(
+            "/api/student/quizzes/quiz-published/submit",
+            headers=self.headers(),
+            json=answers,
+        )
+        self.assertEqual(duplicate.status_code, 409)
+
+    @patch("app.services.student_quiz_service.utc_now")
+    def test_submission_after_closing_time_is_rejected(self, mock_now):
+        mock_now.return_value = NOW + timedelta(hours=2)
+        self.database.documents["quizzes"]["quiz-published"].update(
+            {
+                "opening_at": NOW,
+                "closing_at": NOW + timedelta(hours=1),
+            }
+        )
+        response = self.client.post(
+            "/api/student/quizzes/quiz-published/submit",
+            headers=self.headers(),
+            json={
+                "answers": [
+                    {"question_id": 0, "answer": "Mitochondria"},
+                    {"question_id": 1, "answer": "ATP"},
+                ]
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.database.documents.get("quiz_attempts", {}), {})
+
+    def test_invalid_quiz_answer_is_rejected_without_saving_attempt(self):
+        response = self.client.post(
+            "/api/student/quizzes/quiz-published/submit",
+            headers=self.headers(),
+            json={
+                "answers": [
+                    {"question_id": 0, "answer": "Not an option"},
+                    {"question_id": 1, "answer": "ATP"},
+                ]
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.database.documents.get("quiz_attempts", {}), {})
+
+    def test_boolean_and_identification_answers_are_validated_by_question_type(self):
+        self.database.documents["quizzes"]["quiz-published"]["questions"] = [
+            {"type": "true_false", "prompt": "The Earth orbits the Sun."},
+            {"type": "identification", "prompt": "Name the star at the center."},
+        ]
+        response = self.client.post(
+            "/api/student/quizzes/quiz-published/submit",
+            headers=self.headers(),
+            json={
+                "answers": [
+                    {"question_id": 0, "answer": True},
+                    {"question_id": 1, "answer": "The Sun"},
+                ]
+            },
+        )
+        self.assertEqual(response.status_code, 200)
 
     def test_missing_schedule_fields_are_compatible(self):
         self.database.documents["quizzes"]["quiz-published"].pop("opening_at")
@@ -225,6 +379,11 @@ class StudentQuizApiTests(unittest.TestCase):
         )
         self.assertEqual(missing.status_code, 401)
         self.assertEqual(invalid.status_code, 401)
+
+    def test_inactive_student_account_is_rejected(self):
+        self.database.documents["users"]["student-1"]["status"] = "inactive"
+        response = self.client.get("/api/student/quizzes", headers=self.headers())
+        self.assertEqual(response.status_code, 403)
 
     def test_teacher_cannot_use_student_quiz_routes(self):
         response = self.client.get(

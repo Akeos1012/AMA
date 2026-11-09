@@ -75,7 +75,29 @@ class QuizGenerationService:
         q_type = raw_q.get("type")
         try:
             if q_type == "multiple_choice":
-                return MultipleChoiceQuestion.model_validate(raw_q)
+                options = raw_q.get("options")
+                option_index = raw_q.get("correct_option_index")
+                if type(option_index) is not int or not 0 <= option_index <= 3:
+                    raise SchemaValidationError(
+                        f"Multiple-choice question at index {index} must provide "
+                        "an integer correct_option_index from 0 to 3.",
+                        details={"index": index},
+                    )
+                if (
+                    not isinstance(options, list)
+                    or len(options) != 4
+                    or any(not isinstance(option, str) for option in options)
+                ):
+                    raise SchemaValidationError(
+                        f"Multiple-choice question at index {index} must provide "
+                        "exactly four string options.",
+                        details={"index": index},
+                    )
+
+                question_data = dict(raw_q)
+                question_data.pop("correct_option_index")
+                question_data["correct_answer"] = options[option_index]
+                return MultipleChoiceQuestion.model_validate(question_data)
             elif q_type == "true_false":
                 return TrueFalseQuestion.model_validate(raw_q)
             elif q_type == "identification":

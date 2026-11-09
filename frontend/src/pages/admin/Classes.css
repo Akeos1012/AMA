@@ -155,6 +155,91 @@
     margin-bottom: 12px;
 }
 
+.page-admin-classes .class-add-students {
+    display: grid;
+    gap: 12px;
+    margin: 14px 0;
+    padding: 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: #faf8f8;
+}
+
+.page-admin-classes .class-add-students-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.page-admin-classes .class-add-students-heading p,
+.page-admin-classes .class-add-students-empty,
+.page-admin-classes .class-add-students-error p {
+    color: var(--color-muted);
+    font-size: 13px;
+}
+
+.page-admin-classes .class-add-students > input[type="search"] {
+    width: 100%;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--color-control-border);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 14px;
+}
+
+.page-admin-classes .class-select-all-students,
+.page-admin-classes .class-available-students label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.page-admin-classes .class-available-students {
+    display: grid;
+    gap: 8px;
+    max-height: 240px;
+    margin: 0;
+    padding: 0;
+    overflow: auto;
+    list-style: none;
+}
+
+.page-admin-classes .class-available-students li {
+    padding: 9px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: #fff;
+}
+
+.page-admin-classes .class-available-students label > span {
+    display: grid;
+    gap: 3px;
+}
+
+.page-admin-classes .class-available-students label > span > span {
+    color: var(--color-muted);
+    font-size: 12px;
+}
+
+.page-admin-classes .class-add-students-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.page-admin-classes .class-add-students-actions .primary-button {
+    width: auto;
+}
+
+.page-admin-classes .class-add-students-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
 .page-admin-classes .class-students-table-wrap {
     max-height: 50vh;
     overflow: auto;
@@ -579,6 +664,12 @@
     }
 
     .page-admin-classes .class-students-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .page-admin-classes .class-add-students-heading,
+    .page-admin-classes .class-add-students-error {
         align-items: stretch;
         flex-direction: column;
     }

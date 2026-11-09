@@ -18,6 +18,7 @@ NonEmptyText = Annotated[
 
 QuestionType = Literal["multiple_choice", "true_false", "identification", "essay"]
 QuizDraftStatus = Literal["draft", "published"]
+QuizAvailabilityStatus = Literal["scheduled", "open", "closed"]
 
 
 class SourceEvidence(BaseModel):
@@ -229,6 +230,13 @@ class QuizDraft(BaseModel):
     created_at: AwareDatetime
     updated_at: AwareDatetime
     published_at: AwareDatetime | None = None
+    published_title: NonEmptyText | None = None
+    published_description: str | None = None
+    target_class_id: NonEmptyText | None = None
+    published_grade_level: NonEmptyText | None = None
+    published_section: NonEmptyText | None = None
+    published_by: NonEmptyText | None = None
+    availability_status: QuizAvailabilityStatus | None = None
 
 
 class QuizDraftUpdateRequest(BaseModel):
@@ -257,6 +265,37 @@ class QuizDraftUpdateRequest(BaseModel):
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError("Datetime must include a timezone offset.")
         return parsed
+
+
+class PublishQuizRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    title: NonEmptyText
+    description: str | None = None
+    target_class_id: NonEmptyText
+    opening_at: AwareDatetime
+    closing_at: AwareDatetime
+
+    @field_validator("opening_at", "closing_at", mode="before")
+    @classmethod
+    def parse_datetime_string(cls, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value
+        if not isinstance(value, str):
+            return value
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("Datetime must be a valid ISO 8601 value.") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("Datetime must include a timezone offset.")
+        return parsed
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> "PublishQuizRequest":
+        if self.opening_at >= self.closing_at:
+            raise ValueError("Opening time must be earlier than closing time.")
+        return self
 
 
 class GenerationErrorDetail(BaseModel):
@@ -310,12 +349,28 @@ _MC_QUESTION_SCHEMA: dict = {
     "properties": {
         "type": {"type": "string", "enum": ["multiple_choice"]},
         "prompt": {"type": "string"},
-        "options": {"type": "array", "items": {"type": "string"}},
-        "correct_answer": {"type": "string"},
+        "options": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 4,
+            "maxItems": 4,
+        },
+        "correct_option_index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+        },
         "explanation": {"type": "string"},
         "evidence": _EVIDENCE_SCHEMA,
     },
-    "required": ["type", "prompt", "options", "correct_answer", "explanation", "evidence"],
+    "required": [
+        "type",
+        "prompt",
+        "options",
+        "correct_option_index",
+        "explanation",
+        "evidence",
+    ],
 }
 
 _TF_QUESTION_SCHEMA: dict = {
@@ -391,4 +446,3 @@ def build_quiz_response_schema() -> dict:
         },
         "required": ["title", "topic", "questions"],
     }
-

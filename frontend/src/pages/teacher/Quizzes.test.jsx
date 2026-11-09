@@ -115,6 +115,53 @@ function response(status, data) {
   };
 }
 
+function configureRequests({
+  drafts = [],
+  draftList,
+  generation = response(201, draft),
+  save = response(200, draft),
+  classes = [
+    {
+      id: "class-1",
+      grade_level: "Grade 1",
+      section: "A",
+      assigned_subjects: [{ id: "subject-1", name: "Biology" }],
+    },
+  ],
+  published = [],
+  publish = response(200, { ...draft, status: "published" }),
+} = {}) {
+  mocks.authenticatedFetch.mockImplementation((_user, endpoint, options = {}) => {
+    if (endpoint === "/api/lessons") {
+      return Promise.resolve(response(200, [lesson]));
+    }
+    if (endpoint === "/api/teacher/classes?include_students=false") {
+      return Promise.resolve(response(200, classes));
+    }
+    if (endpoint === "/api/quizzes/published") {
+      return Promise.resolve(response(200, published));
+    }
+    if (endpoint === "/api/quizzes" && !options.method) {
+      const currentDrafts = typeof drafts === "function" ? drafts() : drafts;
+      const currentResponse =
+        typeof draftList === "function"
+          ? draftList()
+          : draftList || response(200, currentDrafts);
+      return Promise.resolve(currentResponse);
+    }
+    if (endpoint.endsWith("/generate-quiz")) {
+      return Promise.resolve(typeof generation === "function" ? generation() : generation);
+    }
+    if (options.method === "PATCH") {
+      return Promise.resolve(typeof save === "function" ? save() : save);
+    }
+    if (options.method === "POST" && endpoint.endsWith("/publish")) {
+      return Promise.resolve(typeof publish === "function" ? publish() : publish);
+    }
+    return Promise.resolve(response(404, { detail: "Not found" }));
+  });
+}
+
 async function openTeacherPage() {
   render(<TeacherQuizzes />);
   await screen.findByRole("combobox", { name: "Lesson" });
@@ -133,11 +180,13 @@ async function requestDraft() {
 beforeEach(() => {
   mocks.user = { uid: "teacher-1", getIdToken: vi.fn() };
   mocks.role = "teacher";
-  mocks.authenticatedFetch.mockReset().mockResolvedValue(response(200, [lesson]));
+  mocks.authenticatedFetch.mockReset();
+  configureRequests();
 });
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe("teacher quiz review", () => {
@@ -158,6 +207,202 @@ describe("teacher quiz review", () => {
     expect(mocks.authenticatedFetch).not.toHaveBeenCalled();
   });
 
+  it("loads and displays saved drafts through the authenticated teacher endpoint", async () => {
+    const savedDraft = {
+      ...draft,
+      id: "saved-quiz-1",
+      title: "Previously Saved Quiz",
+      updated_at: "2026-02-01T12:00:00Z",
+    };
+    configureRequests({ drafts: [savedDraft] });
+
+    await openTeacherPage();
+    expect(await screen.findByText("Previously Saved Quiz")).toBeTruthy();
+    expect(screen.getByText("Lesson: Cell Energy")).toBeTruthy();
+    expect(screen.getByText(/Updated:/)).toBeTruthy();
+
+    const listCall = mocks.authenticatedFetch.mock.calls.find(
+      (call) => call[1] === "/api/quizzes",
+    );
+    expect(listCall[0]).toBe(mocks.user);
+  });
+
+  it("reopens the selected saved draft in the existing review editor", async () => {
+    const savedDraft = {
+      ...draft,
+      id: "saved-quiz-2",
+      title: "Saved Quiz to Reopen",
+    };
+    configureRequests({ drafts: [savedDraft] });
+    const user = userEvent.setup();
+
+    await openTeacherPage();
+    await user.click(await screen.findByRole("button", { name: "Reopen draft" }));
+
+    expect(screen.getByRole("heading", { name: "Saved Quiz to Reopen", level: 3 })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Question 1 correct answer" }).value).toBe(
+      "ATP",
+    );
+    expect(screen.getByRole("button", { name: "Draft open" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+  });
+
+  it("shows publishing for saved drafts and validates publication details", async () => {
+    configureRequests({ drafts: [draft] });
+    const user = userEvent.setup();
+    await openTeacherPage();
+    await user.click(await screen.findByRole("button", { name: "Publish Quiz" }));
+
+    expect(await screen.findByRole("dialog", { name: "Configure publication" })).toBeTruthy();
+    expect(screen.getByText("4 questions will be included.")).toBeTruthy();
+    await user.clear(screen.getByRole("textbox", { name: "Publication title" }));
+    await user.click(screen.getByRole("button", { name: "Confirm and Publish" }));
+
+    expect(await screen.findByText("Quiz title is required.")).toBeTruthy();
+    expect(screen.getByText("Select a grade and section you are authorized to manage.")).toBeTruthy();
+    expect(screen.getByText("Opening date and time are required.")).toBeTruthy();
+    expect(
+      mocks.authenticatedFetch.mock.calls.some((call) => call[2]?.method === "POST"),
+    ).toBe(false);
+  });
+
+  it("publishes a selected draft to the chosen grade and section with Manila times", async () => {
+    configureRequests({ drafts: [draft] });
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const user = userEvent.setup();
+    await openTeacherPage();
+    await user.click(await screen.findByRole("button", { name: "Publish Quiz" }));
+
+    await user.clear(screen.getByRole("textbox", { name: "Publication title" }));
+    await user.type(screen.getByRole("textbox", { name: "Publication title" }), "Published copy");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Grade level" }), "Grade 1");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Section" }), "A");
+    fireEvent.change(screen.getByLabelText("Opening date and time"), {
+      target: { value: "2030-01-01T10:00" },
+    });
+    fireEvent.change(screen.getByLabelText("Closing date and time"), {
+      target: { value: "2030-01-02T10:00" },
+    });
+    await user.click(screen.getByRole("button", { name: "Confirm and Publish" }));
+
+    expect(await screen.findByText('"Published copy" was published.')).toBeTruthy();
+    const publishCall = mocks.authenticatedFetch.mock.calls.find(
+      (call) => call[2]?.method === "POST" && call[1].endsWith("/publish"),
+    );
+    expect(publishCall).toBeTruthy();
+    const body = JSON.parse(publishCall[2].body);
+    expect(body.title).toBe("Published copy");
+    expect(body.target_class_id).toBe("class-1");
+    expect(body.opening_at).toBe("2030-01-01T02:00:00.000Z");
+    expect(body.closing_at).toBe("2030-01-02T02:00:00.000Z");
+    expect(body.teacher_id).toBeUndefined();
+  });
+
+  it("rejects closing times that are not later than opening times", async () => {
+    configureRequests({ drafts: [draft] });
+    const user = userEvent.setup();
+    await openTeacherPage();
+    await user.click(await screen.findByRole("button", { name: "Publish Quiz" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Grade level" }), "Grade 1");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Section" }), "A");
+    fireEvent.change(screen.getByLabelText("Opening date and time"), {
+      target: { value: "2030-01-02T10:00" },
+    });
+    fireEvent.change(screen.getByLabelText("Closing date and time"), {
+      target: { value: "2030-01-01T10:00" },
+    });
+    await user.click(screen.getByRole("button", { name: "Confirm and Publish" }));
+    expect(await screen.findByText("Closing time must be later than opening time.")).toBeTruthy();
+    expect(mocks.authenticatedFetch.mock.calls.some((call) => call[2]?.method === "POST")).toBe(false);
+  });
+
+  it("displays published quizzes with target and server-calculated schedule status", async () => {
+    configureRequests({
+      published: [{
+        ...draft,
+        status: "published",
+        published_title: "Scheduled ATP Quiz",
+        published_grade_level: "Grade 1",
+        published_section: "A",
+        opening_at: "2030-01-01T02:00:00Z",
+        closing_at: "2030-01-02T02:00:00Z",
+        availability_status: "scheduled",
+      }],
+    });
+    await openTeacherPage();
+    expect(await screen.findByRole("heading", { name: "Scheduled ATP Quiz", level: 4 })).toBeTruthy();
+    expect(screen.getByText("Target: Grade 1 — A")).toBeTruthy();
+    expect(screen.getByText("Status: scheduled")).toBeTruthy();
+  });
+
+  it("shows a publishing API error without removing the saved draft", async () => {
+    configureRequests({
+      drafts: [draft],
+      publish: response(403, { detail: "Not authorized for that class." }),
+    });
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const user = userEvent.setup();
+    await openTeacherPage();
+    await user.click(await screen.findByRole("button", { name: "Publish Quiz" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Grade level" }), "Grade 1");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Section" }), "A");
+    fireEvent.change(screen.getByLabelText("Opening date and time"), {
+      target: { value: "2030-01-01T10:00" },
+    });
+    fireEvent.change(screen.getByLabelText("Closing date and time"), {
+      target: { value: "2030-01-02T10:00" },
+    });
+    await user.click(screen.getByRole("button", { name: "Confirm and Publish" }));
+
+    expect(await screen.findByText("Not authorized for that class.")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: draft.title, level: 4 })).toBeTruthy();
+  });
+
+  it("does not offer published quizzes as editable saved drafts", async () => {
+    configureRequests({
+      drafts: [{ ...draft, status: "published" }],
+    });
+
+    await openTeacherPage();
+    expect(await screen.findByText("You have no saved quiz drafts yet.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reopen draft" })).toBeNull();
+  });
+
+  it("shows loading, empty, and retryable error states for saved drafts", async () => {
+    let resolveDraftList;
+    mocks.authenticatedFetch.mockImplementation((_user, endpoint) => {
+      if (endpoint === "/api/quizzes") {
+        return new Promise((resolve) => {
+          resolveDraftList = resolve;
+        });
+      }
+      return Promise.resolve(response(200, [lesson]));
+    });
+
+    await openTeacherPage();
+    expect(screen.getByText("Loading your quiz drafts...")).toBeTruthy();
+    resolveDraftList(response(200, []));
+    expect(await screen.findByText("You have no saved quiz drafts yet.")).toBeTruthy();
+
+    let retryCount = 0;
+    configureRequests({
+      draftList: () => {
+        retryCount += 1;
+        return retryCount === 1
+          ? response(503, { detail: "unavailable" })
+          : response(200, []);
+      },
+    });
+    cleanup();
+    await openTeacherPage();
+    expect(
+      await screen.findByText("Unable to load your quiz drafts right now. Please try again."),
+    ).toBeTruthy();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("You have no saved quiz drafts yet.")).toBeTruthy();
+  });
+
   it("validates the requested question counts before making a request", async () => {
     const user = userEvent.setup();
     await openTeacherPage();
@@ -167,19 +412,22 @@ describe("teacher quiz review", () => {
     expect(
       screen.getByText("Request at least one question across all types."),
     ).toBeTruthy();
-    expect(mocks.authenticatedFetch).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.authenticatedFetch.mock.calls.filter(
+        (call) => call[1] === "/api/lessons" || call[1] === "/api/quizzes",
+      ),
+    ).toHaveLength(2);
   });
 
   it("uses the authenticated teacher and the lesson generation endpoint", async () => {
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(response(201, draft));
     const user = await requestDraft();
 
     await waitFor(() => {
       expect(screen.getByText("Cell Energy Review")).toBeTruthy();
     });
-    const generationCall = mocks.authenticatedFetch.mock.calls[1];
+    const generationCall = mocks.authenticatedFetch.mock.calls.find((call) =>
+      call[1].endsWith("/generate-quiz"),
+    );
     expect(generationCall[0]).toBe(mocks.user);
     expect(generationCall[1]).toBe("/api/lessons/lesson-1/generate-quiz");
     expect(generationCall[2].method).toBe("POST");
@@ -197,13 +445,11 @@ describe("teacher quiz review", () => {
 
   it("prevents duplicate submissions while generation is in progress", async () => {
     let resolveGeneration;
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolveGeneration = resolve;
-        }),
-      );
+    configureRequests({
+      generation: new Promise((resolve) => {
+        resolveGeneration = resolve;
+      }),
+    });
     const user = userEvent.setup();
     await openTeacherPage();
     await user.selectOptions(screen.getByRole("combobox", { name: "Lesson" }), lesson.id);
@@ -212,17 +458,19 @@ describe("teacher quiz review", () => {
     await user.click(button);
     expect(await screen.findByText(/Generating and validating questions/)).toBeTruthy();
     await user.click(button);
-    expect(mocks.authenticatedFetch).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.authenticatedFetch.mock.calls.filter((call) =>
+        call[1].endsWith("/generate-quiz"),
+      ),
+    ).toHaveLength(1);
 
     resolveGeneration(response(201, draft));
     await screen.findByText("Cell Energy Review");
   });
 
   it("shows field-level API validation errors", async () => {
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(
-        response(422, {
+    configureRequests({
+      generation: response(422, {
           detail: [
             {
               loc: ["body", "question_counts", "multiple_choice"],
@@ -230,7 +478,7 @@ describe("teacher quiz review", () => {
             },
           ],
         }),
-      );
+    });
     await requestDraft();
 
     expect(
@@ -246,11 +494,11 @@ describe("teacher quiz review", () => {
   });
 
   it("does not expose provider details or secrets in error states", async () => {
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(
-        response(502, { detail: "private provider token: secret-value; stack trace" }),
-      );
+    configureRequests({
+      generation: response(502, {
+        detail: "private provider token: secret-value; stack trace",
+      }),
+    });
     await requestDraft();
 
     expect(
@@ -262,9 +510,6 @@ describe("teacher quiz review", () => {
   });
 
   it("renders each question type, teacher answers, evidence and validation warnings", async () => {
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(response(201, draft));
     await requestDraft();
 
     expect(await screen.findByText("Cell Energy Review")).toBeTruthy();
@@ -305,9 +550,6 @@ describe("teacher quiz review", () => {
   });
 
   it("keeps edits local and never changes draft status or publishes", async () => {
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(response(201, draft));
     const user = await requestDraft();
     const answer = await screen.findByRole("textbox", {
       name: "Question 1 correct answer",
@@ -320,7 +562,7 @@ describe("teacher quiz review", () => {
     expect(
       screen.getByText(/Review every question before using it with students/),
     ).toBeTruthy();
-    expect(mocks.authenticatedFetch).toHaveBeenCalledTimes(2);
+    expect(mocks.authenticatedFetch.mock.calls).toHaveLength(6);
     expect(mocks.authenticatedFetch.mock.calls.some((call) => call[2]?.method === "PATCH")).toBe(
       false,
     );
@@ -343,10 +585,7 @@ describe("teacher quiz review", () => {
       updated_at: "2026-02-01T00:00:00Z",
     };
 
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(response(201, draft))
-      .mockResolvedValueOnce(response(200, updatedDraft));
+    configureRequests({ save: response(200, updatedDraft) });
 
     const user = await requestDraft();
     const answer = await screen.findByRole("textbox", {
@@ -415,10 +654,7 @@ describe("teacher quiz review", () => {
       updated_at: "2026-02-01T00:00:00Z",
     };
 
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(response(201, draft))
-      .mockResolvedValueOnce(response(200, serverSavedDraft));
+    configureRequests({ save: response(200, serverSavedDraft) });
 
     const user = await requestDraft();
     const saveButton = await screen.findByRole("button", { name: "Save Draft" });
@@ -431,11 +667,38 @@ describe("teacher quiz review", () => {
     expect(screen.getByDisplayValue("Server verified question prompt?")).toBeTruthy();
   });
 
+  it("refreshes My Quiz Drafts after a successful save", async () => {
+    let savedDrafts = [];
+    const updatedDraft = {
+      ...draft,
+      title: "Updated Saved Draft",
+      updated_at: "2026-03-01T00:00:00Z",
+    };
+    configureRequests({
+      drafts: () => savedDrafts,
+      save: () => {
+        savedDrafts = [updatedDraft];
+        return response(200, updatedDraft);
+      },
+    });
+
+    const user = await requestDraft();
+    await user.click(await screen.findByRole("button", { name: "Save Draft" }));
+
+    const savedDraftTitle = await screen.findByRole("heading", {
+      name: "Updated Saved Draft",
+      level: 4,
+    });
+    expect(savedDraftTitle).toBeTruthy();
+    expect(
+      mocks.authenticatedFetch.mock.calls.filter((call) => call[1] === "/api/quizzes"),
+    ).toHaveLength(3);
+  });
+
   it("preserves local edits and displays error message when save fails", async () => {
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(response(201, draft))
-      .mockResolvedValueOnce(response(500, { detail: "Failed to save quiz draft." }));
+    configureRequests({
+      save: response(500, { detail: "Failed to save quiz draft." }),
+    });
 
     const user = await requestDraft();
     const answer = await screen.findByRole("textbox", {
@@ -457,14 +720,11 @@ describe("teacher quiz review", () => {
 
   it("prevents duplicate save submissions while a save is in progress", async () => {
     let resolveSave;
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(response(201, draft))
-      .mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolveSave = resolve;
-        }),
-      );
+    configureRequests({
+      save: new Promise((resolve) => {
+        resolveSave = resolve;
+      }),
+    });
 
     const user = await requestDraft();
     const saveButton = await screen.findByRole("button", { name: "Save Draft" });
@@ -494,9 +754,7 @@ describe("teacher quiz review", () => {
       published_at: "2026-01-02T00:00:00Z",
     };
 
-    mocks.authenticatedFetch
-      .mockResolvedValueOnce(response(200, [lesson]))
-      .mockResolvedValueOnce(response(201, publishedDraft));
+    configureRequests({ generation: response(201, publishedDraft) });
 
     const user = await requestDraft();
     const publishedBadges = await screen.findAllByText("Published");
@@ -530,6 +788,11 @@ describe("teacher quiz review", () => {
 
     const saveButton = screen.getByRole("button", { name: "Save Draft" });
     expect(saveButton.disabled).toBe(true);
+    expect(screen.getByRole("textbox", { name: "Quiz title" }).disabled).toBe(true);
+    expect(screen.getByRole("textbox", { name: "Question 1 text" }).disabled).toBe(true);
+    expect(
+      screen.getByRole("textbox", { name: "Question 1 correct answer" }).disabled,
+    ).toBe(true);
 
     const user = userEvent.setup();
     await user.click(saveButton);

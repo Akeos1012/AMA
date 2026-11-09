@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from google.api_core.exceptions import AlreadyExists
 from pypdf import PdfWriter
 from pypdf.generic import (
     DecodedStreamObject,
@@ -120,6 +121,11 @@ class FakeDocumentReference:
         self.collection.documents[self.id] = self.collection.database.resolve_values(
             data
         )
+
+    def create(self, data):
+        if self.id in self.collection.documents:
+            raise AlreadyExists("Document already exists.")
+        self.set(data)
 
     def update(self, changes):
         if self.id not in self.collection.documents:

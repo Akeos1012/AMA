@@ -83,9 +83,18 @@ function Evidence({ evidence, lesson }) {
   );
 }
 
-function QuestionReview({ question, index, lesson, setDraft, onEdit, validation }) {
+function QuestionReview({
+  question,
+  index,
+  lesson,
+  setDraft,
+  onEdit,
+  validation,
+  readOnly,
+}) {
   const number = index + 1;
   const edit = (field, value) => {
+    if (readOnly) return;
     if (onEdit) {
       onEdit();
     }
@@ -115,6 +124,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
           aria-label={`Question ${number} text`}
           rows="3"
           value={question.prompt}
+          disabled={readOnly}
           onChange={(event) => edit("prompt", event.target.value)}
         />
       </label>
@@ -129,6 +139,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
                 <input
                   aria-label={`Question ${number} option ${optionIndex + 1}`}
                   value={option}
+                  disabled={readOnly}
                   onChange={(event) =>
                     edit(
                       "options",
@@ -146,6 +157,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
             <input
               aria-label={`Question ${number} correct answer`}
               value={question.correct_answer}
+              disabled={readOnly}
               onChange={(event) => edit("correct_answer", event.target.value)}
             />
           </label>
@@ -158,6 +170,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
           <select
             aria-label={`Question ${number} correct answer`}
             value={String(question.correct_answer)}
+            disabled={readOnly}
             onChange={(event) => edit("correct_answer", event.target.value === "true")}
           >
             <option value="true">True</option>
@@ -173,6 +186,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
             <input
               aria-label={`Question ${number} correct answer`}
               value={question.correct_answer}
+              disabled={readOnly}
               onChange={(event) => edit("correct_answer", event.target.value)}
             />
           </label>
@@ -181,6 +195,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
             <input
               aria-label={`Question ${number} accepted alternatives`}
               value={(question.accepted_alternatives ?? []).join(", ")}
+              disabled={readOnly}
               onChange={(event) =>
                 edit(
                   "accepted_alternatives",
@@ -206,6 +221,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
                   aria-label={`Question ${number} rubric item ${rubricIndex + 1}`}
                   rows="2"
                   value={item}
+                  disabled={readOnly}
                   onChange={(event) =>
                     edit(
                       "rubric",
@@ -220,6 +236,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
             <button
               className="secondary-button"
               type="button"
+              disabled={readOnly}
               onClick={() => edit("rubric", [...(question.rubric ?? []), ""])}
             >
               Add rubric item
@@ -231,6 +248,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
               aria-label={`Question ${number} sample solution`}
               rows="3"
               value={question.sample_solution ?? ""}
+              disabled={readOnly}
               onChange={(event) => edit("sample_solution", event.target.value)}
             />
           </label>
@@ -244,6 +262,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
             aria-label={`Question ${number} explanation`}
             rows="2"
             value={question.explanation}
+            disabled={readOnly}
             onChange={(event) => edit("explanation", event.target.value)}
           />
         </label>
@@ -254,7 +273,7 @@ function QuestionReview({ question, index, lesson, setDraft, onEdit, validation 
   );
 }
 
-export default function DraftReview({ draft, lesson, setDraft, user }) {
+export default function DraftReview({ draft, lesson, setDraft, user, onSaved }) {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -335,6 +354,9 @@ export default function DraftReview({ draft, lesson, setDraft, user }) {
 
       setDraft(savedDraft);
       setSaveSuccess("Draft changes saved.");
+      if (onSaved) {
+        await onSaved();
+      }
     } catch (error) {
       console.error("Save quiz draft failed:", error);
       setSaveError("The request could not be completed. Check your connection and try again.");
@@ -396,7 +418,9 @@ export default function DraftReview({ draft, lesson, setDraft, user }) {
       )}
 
       <div className="quiz-review-notice" role="note">
-        Review every question before using it with students. This draft is not approved or published.
+        {isPublished
+          ? "This quiz has been published and is read-only."
+          : "Review every question before using it with students. This draft is not approved or published."}
       </div>
 
       <div className="quiz-draft-metadata-fields">
@@ -406,6 +430,7 @@ export default function DraftReview({ draft, lesson, setDraft, user }) {
             aria-label="Quiz title"
             type="text"
             value={draft.title ?? ""}
+            disabled={isPublished}
             onChange={(event) => {
               setSaveSuccess("");
               setDraft((current) => ({ ...current, title: event.target.value }));
@@ -419,6 +444,7 @@ export default function DraftReview({ draft, lesson, setDraft, user }) {
               aria-label="Quiz description"
               rows="2"
               value={draft.description ?? ""}
+              disabled={isPublished}
               onChange={(event) => {
                 setSaveSuccess("");
                 setDraft((current) => ({
@@ -459,6 +485,7 @@ export default function DraftReview({ draft, lesson, setDraft, user }) {
             lesson={lesson}
             question={question}
             setDraft={setDraft}
+            readOnly={isPublished}
             onEdit={() => setSaveSuccess("")}
             validation={report?.question_reports?.find(
               (questionReport) => questionReport.question_index === index,
@@ -469,4 +496,3 @@ export default function DraftReview({ draft, lesson, setDraft, user }) {
     </section>
   );
 }
-
