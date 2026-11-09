@@ -285,6 +285,47 @@ class TestLessonTextExtraction(unittest.TestCase):
             ],
         )
 
+    def test_explicit_lesson_id_overrides_missing_document_id(self):
+        lesson_data = {
+            "title": "Geology",
+            "topic": "Earth Science",
+            "content": {
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "text": "Earth materials form layers with different properties beneath the surface.",
+                    },
+                ]
+            },
+        }
+
+        extracted = extract_lesson_text(
+            lesson_data, min_word_count=10, lesson_id="firestore-lesson-1"
+        )
+
+        self.assertEqual(extracted.lesson_id, "firestore-lesson-1")
+        self.assertEqual(
+            evidence_id_for_passage(extracted.lesson_id, extracted.passages[0].block_index),
+            "lesson:firestore-lesson-1:block:0",
+        )
+
+    def test_extraction_without_explicit_lesson_id_remains_compatible(self):
+        lesson_data = {
+            "id": "lesson-from-data",
+            "content": {
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "text": "Earth materials form layers with different properties beneath the surface.",
+                    },
+                ]
+            },
+        }
+
+        extracted = extract_lesson_text(lesson_data, min_word_count=10)
+
+        self.assertEqual(extracted.lesson_id, "lesson-from-data")
+
     def test_extract_pydantic_blocks_support(self):
         blocks = [
             HeadingBlock(type="heading", level=1, text="Photosynthesis"),
@@ -722,6 +763,14 @@ class TestPromptBuilder(unittest.TestCase):
         self.assertIn('"correct_option_index": integer from 0 to 3', user_prompt)
         self.assertIn('Do NOT output a separate "correct_answer"', user_prompt)
 
+    def test_prompt_requires_supported_multiple_choice_and_true_false_explanations(self):
+        _, user_prompt = build_quiz_prompt(self.lesson, self.request)
+
+        self.assertIn("why the designated correct answer is correct", user_prompt)
+        self.assertIn("relevant lesson concept or evidence", user_prompt)
+        self.assertIn("for a false statement, identify what is incorrect", user_prompt)
+        self.assertIn("provide a correction supported by the lesson", user_prompt)
+
     def test_build_prompt_rejects_empty_lesson(self):
         empty_lesson = ExtractedLessonContent(
             lesson_id="empty",
@@ -1091,6 +1140,117 @@ class TestValidation(unittest.TestCase):
         self.assertEqual(report.question_reports[0].status, "passed")
         self.assertTrue(report.question_reports[0].quote_valid)
         self.assertTrue(report.question_reports[0].block_reference_valid)
+
+    def test_mcq_explanation_connects_correct_answer_to_lesson_evidence(self):
+        question = MultipleChoiceQuestion(
+            prompt="Which organelle generates ATP?",
+            options=["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+            correct_answer="Mitochondria",
+            explanation="Mitochondria generate chemical energy as ATP for cell processes.",
+            evidence=SourceEvidence(
+                quote=self.lesson.passages[0].text,
+                block_index=0,
+            ),
+        )
+
+        status, issues = AnswerCorrectnessValidator().validate_question_correctness(
+            question, 0, self.lesson
+        )
+
+        self.assertEqual(status, "passed")
+        self.assertEqual(issues, [])
+
+    def test_mcq_explanation_with_unrelated_lesson_information_needs_review(self):
+        question = MultipleChoiceQuestion(
+            prompt="Which organelle generates ATP?",
+            options=["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+            correct_answer="Mitochondria",
+            explanation="Ribosomes perform biological protein synthesis.",
+            evidence=SourceEvidence(
+                quote=self.lesson.passages[0].text,
+                block_index=0,
+            ),
+        )
+
+        status, issues = AnswerCorrectnessValidator().validate_question_correctness(
+            question, 0, self.lesson
+        )
+
+        self.assertEqual(status, "needs_review")
+        self.assertTrue(any(issue.severity == "warning" for issue in issues))
+
+    def test_mcq_explanation_that_only_repeats_answer_needs_review(self):
+        question = MultipleChoiceQuestion(
+            prompt="Which organelle generates ATP?",
+            options=["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+            correct_answer="Mitochondria",
+            explanation="Mitochondria.",
+            evidence=SourceEvidence(
+                quote=self.lesson.passages[0].text,
+                block_index=0,
+            ),
+        )
+
+        status, _ = AnswerCorrectnessValidator().validate_question_correctness(
+            question, 0, self.lesson
+        )
+
+        self.assertEqual(status, "needs_review")
+
+    def test_false_true_false_explanation_with_lesson_correction_passes(self):
+        question = TrueFalseQuestion(
+            prompt="Ribosomes generate ATP.",
+            correct_answer=False,
+            explanation="Ribosomes do not generate ATP; they perform biological protein synthesis.",
+            evidence=SourceEvidence(
+                quote=self.lesson.passages[1].text,
+                block_index=1,
+            ),
+        )
+
+        status, issues = AnswerCorrectnessValidator().validate_question_correctness(
+            question, 0, self.lesson
+        )
+
+        self.assertEqual(status, "passed")
+        self.assertEqual(issues, [])
+
+    def test_false_true_false_explanation_with_negative_word_but_no_correction_needs_review(self):
+        question = TrueFalseQuestion(
+            prompt="Ribosomes generate ATP.",
+            correct_answer=False,
+            explanation="Ribosomes do not generate ATP.",
+            evidence=SourceEvidence(
+                quote=self.lesson.passages[1].text,
+                block_index=1,
+            ),
+        )
+
+        status, issues = AnswerCorrectnessValidator().validate_question_correctness(
+            question, 0, self.lesson
+        )
+
+        self.assertEqual(status, "needs_review")
+        self.assertTrue(any(issue.severity == "warning" for issue in issues))
+
+    def test_explanation_claim_unsupported_by_evidence_needs_review(self):
+        question = MultipleChoiceQuestion(
+            prompt="Which organelle generates chemical energy in ATP?",
+            options=["Mitochondria", "Ribosome", "Nucleus", "Vacuole"],
+            correct_answer="Mitochondria",
+            explanation="Mitochondria make glucose through photosynthesis.",
+            evidence=SourceEvidence(
+                quote=self.lesson.passages[0].text,
+                block_index=0,
+            ),
+        )
+
+        status, issues = AnswerCorrectnessValidator().validate_question_correctness(
+            question, 0, self.lesson
+        )
+
+        self.assertEqual(status, "needs_review")
+        self.assertTrue(any(issue.severity == "warning" for issue in issues))
 
     def test_fabricated_quote_fails_validation(self):
         mcq = MultipleChoiceQuestion(
@@ -1795,6 +1955,104 @@ class TestQuizGenerationAPI(unittest.TestCase):
 
         self.assertEqual(res.status_code, 403)
 
+    def test_teacher_can_delete_owned_draft_without_deleting_attempts(self):
+        self.seed_quiz()
+        attempt = {
+            "quiz_id": "quiz-1",
+            "student_uid": "student-1",
+            "answers": [{"question_id": 0, "answer": "Mitochondria"}],
+        }
+        self.database.collection("quiz_attempts").documents[
+            "attempt-1"
+        ] = attempt.copy()
+
+        response = self.client.delete(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.content, b"")
+        self.assertNotIn("quiz-1", self.database.collection("quizzes").documents)
+        self.assertEqual(
+            self.database.collection("quiz_attempts").documents["attempt-1"],
+            attempt,
+        )
+
+    def test_delete_quiz_draft_returns_not_found_for_missing_document(self):
+        response = self.client.delete(
+            "/quizzes/missing-quiz",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_delete_quiz_draft_rejects_invalid_document_id(self):
+        from app.services.lesson_quiz_service import delete_quiz_draft
+
+        with self.assertRaises(HTTPException) as invalid_id:
+            delete_quiz_draft(self.database, "invalid/quiz-id", "teacher-1")
+
+        self.assertEqual(invalid_id.exception.status_code, 422)
+
+    def test_teacher_cannot_delete_another_teachers_draft(self):
+        self.seed_quiz(teacher_id="teacher-2")
+
+        response = self.client.delete(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("quiz-1", self.database.collection("quizzes").documents)
+
+    def test_missing_authentication_cannot_delete_quiz_draft(self):
+        self.seed_quiz()
+
+        response = self.client.delete("/quizzes/quiz-1")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("quiz-1", self.database.collection("quizzes").documents)
+
+    def test_non_teacher_cannot_delete_quiz_draft(self):
+        self.seed_quiz()
+
+        response = self.client.delete(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer student-1"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("quiz-1", self.database.collection("quizzes").documents)
+
+    def test_inactive_teacher_cannot_delete_quiz_draft(self):
+        self.seed_quiz()
+
+        response = self.client.delete(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-disabled"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("quiz-1", self.database.collection("quizzes").documents)
+
+    def test_published_quiz_cannot_be_deleted(self):
+        self.seed_quiz(status="published")
+        published_quiz = self.database.collection("quizzes").documents[
+            "quiz-1"
+        ].copy()
+
+        response = self.client.delete(
+            "/quizzes/quiz-1",
+            headers={"Authorization": "Bearer teacher-1"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            self.database.collection("quizzes").documents["quiz-1"],
+            published_quiz,
+        )
+
     def test_teacher_can_update_owned_draft(self):
         self.seed_quiz(include_metadata=False)
         res = self.client.patch(
@@ -2333,6 +2591,7 @@ class TestQuizGenerationAPI(unittest.TestCase):
         generated_lesson = self.mock_orchestrator.orchestrate_generation.call_args.kwargs[
             "lesson"
         ]
+        self.assertEqual(generated_lesson.lesson_id, "lesson-1")
         self.assertIn(
             "Mitochondria are membrane-bound cell organelles",
             generated_lesson.full_text,

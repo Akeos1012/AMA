@@ -45,6 +45,7 @@ def evidence_id_for_passage(lesson_id: str, block_index: int) -> str:
 def extract_lesson_text(
     lesson_data: dict[str, Any],
     min_word_count: int = 15,
+    lesson_id: str | None = None,
 ) -> ExtractedLessonContent:
     """
     Extracts and normalizes educational text from structured lesson blocks.
@@ -54,7 +55,9 @@ def extract_lesson_text(
     Preserves block indices and section hierarchy for grounding verification.
     Raises InsufficientLessonContentError if educational content is empty or below threshold.
     """
-    lesson_id = str(lesson_data.get("id") or lesson_data.get("lesson_id") or "unknown")
+    resolved_lesson_id = lesson_id or str(
+        lesson_data.get("id") or lesson_data.get("lesson_id") or "unknown"
+    )
     title = str(lesson_data.get("title") or "").strip()
     topic = str(lesson_data.get("topic") or "").strip()
 
@@ -149,7 +152,7 @@ def extract_lesson_text(
                 f"which is below the minimum threshold of {min_word_count} words required for quiz generation."
             ),
             details={
-                "lesson_id": lesson_id,
+                "lesson_id": resolved_lesson_id,
                 "word_count": total_words,
                 "min_word_count": min_word_count,
                 "passage_count": len(passages),
@@ -159,7 +162,7 @@ def extract_lesson_text(
     full_text = "\n\n".join(formatted_sections)
 
     return ExtractedLessonContent(
-        lesson_id=lesson_id,
+        lesson_id=resolved_lesson_id,
         title=title,
         topic=topic,
         passages=passages,

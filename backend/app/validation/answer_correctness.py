@@ -88,12 +88,29 @@ class AnswerCorrectnessValidator:
             else:
                 exp_keywords = extract_keywords(question.explanation)
                 ans_keywords = extract_keywords(question.correct_answer)
-                if ans_keywords and not (ans_keywords & exp_keywords):
+                prompt_keywords = extract_keywords(question.prompt)
+                evidence_keywords = extract_keywords(question.evidence.quote)
+                answer_is_explained = bool(ans_keywords & exp_keywords)
+                explanation_adds_lesson_support = bool(
+                    (exp_keywords & evidence_keywords) - ans_keywords
+                )
+                question_concept_is_explained = bool(
+                    exp_keywords
+                    & ((prompt_keywords & evidence_keywords) - ans_keywords)
+                )
+                if (
+                    not answer_is_explained
+                    or not explanation_adds_lesson_support
+                    or not question_concept_is_explained
+                ):
                     issues.append(
                         ValidationIssue(
                             severity="warning",
                             stage="correctness",
-                            message="Explanation does not explicitly reference or support the designated correct answer.",
+                            message=(
+                                "Explanation does not meaningfully connect the designated "
+                                "correct answer to supporting lesson content."
+                            ),
                             question_index=question_index,
                         )
                     )
@@ -123,21 +140,43 @@ class AnswerCorrectnessValidator:
                 )
                 status = "failed"
             else:
-                # If question is false, the explanation should ideally explain why or state the true fact
+                exp_keywords = extract_keywords(question.explanation)
+                prompt_keywords = extract_keywords(question.prompt)
+                evidence_keywords = extract_keywords(question.evidence.quote)
+                explanation_support = exp_keywords & evidence_keywords
+                statement_support = exp_keywords & prompt_keywords & evidence_keywords
+
                 if question.correct_answer is False:
-                    exp_lower = question.explanation.lower()
-                    negative_markers = {"not", "false", "instead", "rather", "incorrect", "actually", "reflect"}
-                    if not any(marker in exp_lower for marker in negative_markers):
-                        issues.append(
-                            ValidationIssue(
-                                severity="warning",
-                                stage="correctness",
-                                message="Explanation for false statement does not explain why the statement is false.",
-                                question_index=question_index,
-                            )
+                    correction_support = explanation_support - prompt_keywords
+                    explanation_is_supported = (
+                        bool(statement_support)
+                        and len(explanation_support) >= 2
+                        and bool(correction_support)
+                    )
+                    warning_message = (
+                        "Explanation for false statement does not identify a correction "
+                        "supported by the lesson evidence."
+                    )
+                else:
+                    explanation_is_supported = (
+                        bool(statement_support) and len(explanation_support) >= 2
+                    )
+                    warning_message = (
+                        "Explanation does not meaningfully connect the true statement "
+                        "to supporting lesson content."
+                    )
+
+                if not explanation_is_supported:
+                    issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            stage="correctness",
+                            message=warning_message,
+                            question_index=question_index,
                         )
-                        if status != "failed":
-                            status = "needs_review"
+                    )
+                    if status != "failed":
+                        status = "needs_review"
 
         elif isinstance(question, IdentificationQuestion):
             if not question.correct_answer or not question.correct_answer.strip():

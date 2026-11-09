@@ -130,7 +130,9 @@ function configureRequests({
   ],
   published = [],
   publish = response(200, { ...draft, status: "published" }),
+  remove = response(204, null),
 } = {}) {
+  let savedDrafts = Array.isArray(drafts) ? [...drafts] : [];
   mocks.authenticatedFetch.mockImplementation((_user, endpoint, options = {}) => {
     if (endpoint === "/api/lessons") {
       return Promise.resolve(response(200, [lesson]));
@@ -142,12 +144,23 @@ function configureRequests({
       return Promise.resolve(response(200, published));
     }
     if (endpoint === "/api/quizzes" && !options.method) {
-      const currentDrafts = typeof drafts === "function" ? drafts() : drafts;
+      const currentDrafts =
+        typeof drafts === "function" ? drafts() : savedDrafts;
       const currentResponse =
         typeof draftList === "function"
           ? draftList()
           : draftList || response(200, currentDrafts);
       return Promise.resolve(currentResponse);
+    }
+    if (options.method === "DELETE" && endpoint.startsWith("/api/quizzes/")) {
+      const currentRemove = typeof remove === "function" ? remove() : remove;
+      return Promise.resolve(currentRemove).then((result) => {
+        if (result.ok) {
+          const quizId = decodeURIComponent(endpoint.split("/").pop());
+          savedDrafts = savedDrafts.filter((savedDraft) => savedDraft.id !== quizId);
+        }
+        return result;
+      });
     }
     if (endpoint.endsWith("/generate-quiz")) {
       return Promise.resolve(typeof generation === "function" ? generation() : generation);
@@ -225,6 +238,117 @@ describe("teacher quiz review", () => {
       (call) => call[1] === "/api/quizzes",
     );
     expect(listCall[0]).toBe(mocks.user);
+  });
+
+  it("shows a Remove action for saved drafts and confirms permanent deletion", async () => {
+    configureRequests({ drafts: [draft] });
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const user = userEvent.setup();
+
+    await openTeacherPage();
+    await user.click(await screen.findByRole("button", { name: "Remove" }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      `Permanently delete "${draft.title}"? This action cannot be undone.`,
+    );
+    expect(
+      mocks.authenticatedFetch.mock.calls.some((call) => call[2]?.method === "DELETE"),
+    ).toBe(false);
+    expect(screen.getByRole("heading", { name: draft.title, level: 4 })).toBeTruthy();
+  });
+
+  it("confirms and deletes the correct draft, then refreshes the list", async () => {
+    configureRequests({ drafts: [draft] });
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const user = userEvent.setup();
+
+    await openTeacherPage();
+    await user.click(await screen.findByRole("button", { name: "Remove" }));
+
+    expect(
+      await screen.findByText(`"${draft.title}" was permanently deleted.`),
+    ).toBeTruthy();
+    const deleteCall = mocks.authenticatedFetch.mock.calls.find(
+      (call) => call[2]?.method === "DELETE",
+    );
+    expect(deleteCall[0]).toBe(mocks.user);
+    expect(deleteCall[1]).toBe(`/api/quizzes/${draft.id}`);
+    expect(
+      await screen.findByText("You have no saved quiz drafts yet."),
+    ).toBeTruthy();
+  });
+
+  it("preserves the draft and displays an API error when deletion fails", async () => {
+    configureRequests({
+      drafts: [draft],
+      remove: response(409, { detail: "Only quiz drafts can be deleted." }),
+    });
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const user = userEvent.setup();
+
+    await openTeacherPage();
+    await user.click(await screen.findByRole("button", { name: "Remove" }));
+
+    expect(
+      await screen.findByText("Only quiz drafts can be deleted."),
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: draft.title, level: 4 })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
+  });
+
+  it("prevents repeated deletion requests while one is pending", async () => {
+    let resolveRemove;
+    configureRequests({
+      drafts: [draft],
+      remove: () =>
+        new Promise((resolve) => {
+          resolveRemove = resolve;
+        }),
+    });
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const user = userEvent.setup();
+
+    await openTeacherPage();
+    const removeButton = await screen.findByRole("button", { name: "Remove" });
+    await user.click(removeButton);
+
+    const removingButton = screen.getByRole("button", { name: "Removing..." });
+    expect(removingButton.disabled).toBe(true);
+    fireEvent.click(removingButton);
+    expect(
+      mocks.authenticatedFetch.mock.calls.filter(
+        (call) => call[2]?.method === "DELETE",
+      ),
+    ).toHaveLength(1);
+
+    resolveRemove(response(204, null));
+    await screen.findByText("You have no saved quiz drafts yet.");
+  });
+
+  it("clears the editor and publication dialog after deleting the open draft", async () => {
+    configureRequests({ drafts: [draft] });
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const user = userEvent.setup();
+
+    await openTeacherPage();
+    await user.click(await screen.findByRole("button", { name: "Reopen draft" }));
+    expect(
+      screen.getByRole("heading", { name: draft.title, level: 3 }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Publish Quiz" }));
+    expect(
+      screen.getByRole("dialog", { name: "Configure publication" }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(await screen.findByText("You have no saved quiz drafts yet.")).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: draft.title, level: 3 }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("dialog", { name: "Configure publication" }),
+    ).toBeNull();
   });
 
   it("reopens the selected saved draft in the existing review editor", async () => {
@@ -367,6 +491,7 @@ describe("teacher quiz review", () => {
     await openTeacherPage();
     expect(await screen.findByText("You have no saved quiz drafts yet.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Reopen draft" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
   });
 
   it("shows loading, empty, and retryable error states for saved drafts", async () => {

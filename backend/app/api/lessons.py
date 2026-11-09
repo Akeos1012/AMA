@@ -63,6 +63,7 @@ from app.services.quiz_generation_service import (
     QuizGenerationService,
 )
 from app.services.lesson_quiz_service import (
+    delete_quiz_draft as delete_quiz_draft_service,
     generate_quiz_for_lesson as generate_quiz_for_lesson_service,
     list_quiz_drafts as list_quiz_drafts_service,
     list_published_quizzes as list_published_quizzes_service,
@@ -351,6 +352,18 @@ def update_quiz_draft(
     database = get_database()
     validate_active_account(database, teacher_uid, "teacher")
     return update_quiz_draft_service(database, quiz_id, teacher_uid, body)
+
+
+@router.delete("/quizzes/{quiz_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_quiz_draft(
+    quiz_id: str,
+    decoded_token: dict[str, Any] = Depends(verify_firebase_token),
+) -> Response:
+    teacher_uid = require_role(decoded_token, "teacher")
+    database = get_database()
+    validate_active_account(database, teacher_uid, "teacher")
+    delete_quiz_draft_service(database, quiz_id, teacher_uid)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/quizzes/{quiz_id}/publish", response_model=QuizDraft)

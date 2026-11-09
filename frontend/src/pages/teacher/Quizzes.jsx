@@ -119,6 +119,9 @@ export default function TeacherQuizzes() {
   const [quizDrafts, setQuizDrafts] = useState([]);
   const [quizDraftsLoading, setQuizDraftsLoading] = useState(false);
   const [quizDraftsError, setQuizDraftsError] = useState("");
+  const [deletingDraftId, setDeletingDraftId] = useState("");
+  const [deleteDraftError, setDeleteDraftError] = useState("");
+  const [deleteDraftSuccess, setDeleteDraftSuccess] = useState("");
   const [teacherClasses, setTeacherClasses] = useState([]);
   const [teacherClassesLoading, setTeacherClassesLoading] = useState(false);
   const [teacherClassesError, setTeacherClassesError] = useState("");
@@ -146,6 +149,7 @@ export default function TeacherQuizzes() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [draft, setDraft] = useState(null);
   const submissionLock = useRef(false);
+  const deleteSubmissionLock = useRef(false);
 
   const loadLessons = useCallback(async (activeUser) => {
     setLessonsLoading(true);
@@ -370,6 +374,56 @@ export default function TeacherQuizzes() {
     setPublishErrors({});
     setPublishError("");
     setPublishSuccess("");
+  };
+
+  const handleDeleteDraft = async (savedDraft) => {
+    if (!user || deleteSubmissionLock.current) return;
+    if (
+      !window.confirm(
+        `Permanently delete "${savedDraft.title}"? This action cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    deleteSubmissionLock.current = true;
+    setDeletingDraftId(savedDraft.id);
+    setDeleteDraftError("");
+    setDeleteDraftSuccess("");
+    try {
+      const response = await authenticatedFetch(
+        user,
+        `/api/quizzes/${encodeURIComponent(savedDraft.id)}`,
+        { method: "DELETE" },
+      );
+      if (!response.ok) {
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+        setDeleteDraftError(
+          typeof payload?.detail === "string"
+            ? payload.detail
+            : "Unable to delete this quiz draft. Please try again.",
+        );
+        return;
+      }
+
+      if (draft?.id === savedDraft.id) setDraft(null);
+      if (publishDraft?.id === savedDraft.id) setPublishDraft(null);
+      setDeleteDraftSuccess(`"${savedDraft.title}" was permanently deleted.`);
+      await loadQuizDrafts(user);
+    } catch (error) {
+      console.error("Delete quiz draft request failed:", error);
+      setDeleteDraftError(
+        "The delete request could not be completed. Check your connection and try again.",
+      );
+    } finally {
+      deleteSubmissionLock.current = false;
+      setDeletingDraftId("");
+    }
   };
 
   const handlePublish = async (event) => {
@@ -607,6 +661,17 @@ export default function TeacherQuizzes() {
           <p>Reopen a saved draft to continue reviewing or editing it.</p>
         </div>
 
+        {deleteDraftSuccess && (
+          <p className="quiz-form-message success" role="status">
+            {deleteDraftSuccess}
+          </p>
+        )}
+        {deleteDraftError && (
+          <p className="quiz-form-message error" role="alert">
+            {deleteDraftError}
+          </p>
+        )}
+
         {quizDraftsLoading && (
           <p className="quiz-loading-message" role="status">
             Loading your quiz drafts...
@@ -651,6 +716,7 @@ export default function TeacherQuizzes() {
                     type="button"
                     className={isSelected ? "secondary-button" : "primary-button"}
                     aria-pressed={isSelected}
+                    disabled={Boolean(deletingDraftId)}
                     onClick={() => {
                       setLessonId(savedDraft.lesson_id);
                       setDraft(savedDraft);
@@ -661,9 +727,18 @@ export default function TeacherQuizzes() {
                   <button
                     type="button"
                     className="secondary-button"
+                    disabled={Boolean(deletingDraftId)}
                     onClick={() => openPublishForm(savedDraft)}
                   >
                     Publish Quiz
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button quiz-delete-draft-button"
+                    disabled={Boolean(deletingDraftId)}
+                    onClick={() => handleDeleteDraft(savedDraft)}
+                  >
+                    {deletingDraftId === savedDraft.id ? "Removing..." : "Remove"}
                   </button>
                 </li>
               );

@@ -105,7 +105,7 @@ def generate_quiz_for_lesson(
     orchestrator: QuizGenerationOrchestrator,
 ) -> QuizDraft:
     try:
-        extracted_lesson = extract_lesson_text(lesson_data)
+        extracted_lesson = extract_lesson_text(lesson_data, lesson_id=lesson_id)
     except InsufficientLessonContentError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -295,7 +295,9 @@ def update_quiz_draft(
         ):
             raise HTTPException(status_code=404, detail="Quiz draft not found.")
         require_teacher_lesson_access(database, teacher_uid, lesson_data)
-        extracted_lesson = extract_lesson_text(lesson_data)
+        extracted_lesson = extract_lesson_text(
+            lesson_data, lesson_id=current["lesson_id"]
+        )
         quiz = GeneratedQuiz(
             title=merged["title"],
             topic=lesson_data.get("topic", "Quiz"),
@@ -339,6 +341,36 @@ def update_quiz_draft(
             detail="Failed to retrieve saved quiz draft.",
         )
     return quiz_draft_response(quiz_id, saved_doc.to_dict() or {})
+
+
+def delete_quiz_draft(
+    database: Any,
+    quiz_id: str,
+    teacher_uid: str,
+) -> None:
+    """Delete an owned quiz draft without affecting related records."""
+    quiz_id = validate_document_id(quiz_id, "quiz ID")
+    quiz_ref = database.collection(QUIZ_COLLECTION).document(quiz_id)
+    snapshot = quiz_ref.get()
+    if not snapshot.exists:
+        raise HTTPException(status_code=404, detail="Quiz draft not found.")
+
+    current = snapshot.to_dict() or {}
+    if current.get("teacher_id") != teacher_uid:
+        raise HTTPException(status_code=404, detail="Quiz draft not found.")
+    if current.get("status") != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only quiz drafts can be deleted.",
+        )
+
+    try:
+        quiz_ref.delete()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete quiz draft.",
+        ) from exc
 
 
 def publish_quiz(
@@ -411,7 +443,9 @@ def publish_quiz(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="The subject is not available for the selected class's grade level.",
             )
-        extracted_lesson = extract_lesson_text(lesson_data)
+        extracted_lesson = extract_lesson_text(
+            lesson_data, lesson_id=current["lesson_id"]
+        )
         quiz = GeneratedQuiz(
             title=current["title"],
             topic=lesson_data.get("topic", "Quiz"),
